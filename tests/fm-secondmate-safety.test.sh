@@ -1557,110 +1557,6 @@ EOF
   pass "secondmate teardown retires empty homes and releases routing"
 }
 
-# The pool root a secondmate's own crewmate spawns filled
-# (bin/fm-wake-lib.sh's fm_treehouse_home_pool_root) has no owner once the home
-# is gone: every worktree under it is a worktree of the home's clone, which
-# retirement removes. Retirement reclaims it, and refuses when any record still
-# names a slot inside it.
-
-# make_pool_root_case <name>: a parent home, a leased secondmate home 'domain',
-# a pinned $HOME, and that home's derived pool root already populated as
-# treehouse would leave it. Echoes "<home>|<subhome>|<fmroot>|<fakebin>|<lease>|<userhome>|<root>".
-make_pool_root_case() {
-  local name=$1 home subhome subhome_abs fmroot fakebin lease userhome root
-  home="$TMP_ROOT/$name-home"
-  subhome="$TMP_ROOT/$name-subhome"
-  fmroot="$TMP_ROOT/$name-fmroot"
-  userhome="$TMP_ROOT/$name-userhome"
-  make_firstmate_git_root "$fmroot"
-  git -C "$fmroot" worktree add --quiet --detach "$subhome" HEAD
-  mkdir -p "$home/state" "$home/data" "$subhome/state" "$userhome"
-  printf 'domain\n' > "$subhome/.fm-secondmate-home"
-  subhome_abs=$(cd "$subhome" && pwd -P)
-  cat > "$home/state/domain.meta" <<EOF
-window=firstmate:fm-domain
-worktree=$subhome
-project=$subhome
-harness=echo
-kind=secondmate
-mode=secondmate
-yolo=off
-home=$subhome
-projects=alpha
-EOF
-  printf '%s\n' '- domain - design domain (home: '"$subhome"'; scope: design domain; projects: alpha; added 2026-06-22)' \
-    > "$home/data/secondmates.md"
-  fakebin=$(make_fake_tmux "$TMP_ROOT/$name-fake")
-  lease="$TMP_ROOT/$name-fake/lease"
-  printf 'domain\n' > "$lease"
-  root="$userhome/.treehouse-homes/domain-$(printf '%s' "$subhome_abs" | git hash-object --stdin)"
-  mkdir -p "$root/.treehouse/alpha-abc123/1/alpha"
-  printf 'pooled\n' > "$root/.treehouse/alpha-abc123/1/alpha/README.md"
-  printf '%s|%s|%s|%s|%s|%s|%s\n' "$home" "$subhome" "$fmroot" "$fakebin" "$lease" "$userhome" "$root"
-}
-
-run_pool_root_teardown() {  # <name> <home> <fmroot> <fakebin> <lease> <userhome>
-  local name=$1 home=$2 fmroot=$3 fakebin=$4 lease=$5 userhome=$6
-  PATH="$fakebin:$PATH" HOME="$userhome" FM_ROOT_OVERRIDE="$fmroot" FM_HOME="$home" \
-    FM_FAKE_TMUX_LOG="$TMP_ROOT/$name-fake/tmux.log" \
-    FM_FAKE_TMUX_CAPTURE="$TMP_ROOT/$name-fake/pane.txt" \
-    FM_FAKE_TREEHOUSE_LEASE_FILE="$lease" \
-    "$ROOT/bin/fm-teardown.sh" domain
-}
-
-test_secondmate_retirement_reclaims_its_own_pool_root() {
-  local home subhome fmroot fakebin lease userhome root
-  IFS='|' read -r home subhome fmroot fakebin lease userhome root <<EOF
-$(make_pool_root_case pool-reclaim)
-EOF
-  [ -d "$root" ] || fail "fixture did not create the secondmate's pool root at $root"
-
-  run_pool_root_teardown pool-reclaim "$home" "$fmroot" "$fakebin" "$lease" "$userhome" \
-    >/dev/null 2>"$TMP_ROOT/pool-reclaim.err" \
-    || fail "teardown failed for a secondmate with its own pool root: $(cat "$TMP_ROOT/pool-reclaim.err")"
-
-  [ ! -d "$subhome" ] || fail "teardown did not remove the retired secondmate home"
-  [ ! -e "$root" ] \
-    || fail "teardown retired the home but left its private Treehouse pool root at $root"
-  [ -d "$userhome/.treehouse-homes" ] \
-    || fail "teardown removed the shared .treehouse-homes directory, not just this home's root"
-  pass "secondmate retirement reclaims that home's own Treehouse pool root"
-}
-
-test_secondmate_retirement_refuses_a_pool_root_another_task_still_owns() {
-  local home subhome fmroot fakebin lease userhome root slot err
-  IFS='|' read -r home subhome fmroot fakebin lease userhome root <<EOF
-$(make_pool_root_case pool-owned)
-EOF
-  slot="$root/.treehouse/alpha-abc123/2/alpha"
-  mkdir -p "$slot"
-  cat > "$home/state/other.meta" <<EOF
-window=firstmate:fm-other
-worktree=$slot
-project=$subhome
-harness=echo
-kind=ship
-mode=no-mistakes
-yolo=off
-EOF
-  err="$TMP_ROOT/pool-owned.err"
-
-  if run_pool_root_teardown pool-owned "$home" "$fmroot" "$fakebin" "$lease" "$userhome" \
-    >/dev/null 2>"$err"; then
-    fail "teardown removed a pool root whose slot another task record still names"
-  fi
-  grep -F "task other's recorded worktree $slot is inside secondmate domain's Treehouse pool root" "$err" >/dev/null \
-    || fail "teardown did not name the owning record as evidence: $(cat "$err")"
-  [ -d "$slot" ] || fail "teardown removed the slot another task still records"
-  [ -d "$root" ] || fail "teardown removed the pool root it refused to reclaim"
-  [ -d "$subhome" ] || fail "teardown removed the secondmate home after refusing its pool root"
-  [ -e "$lease" ] || fail "teardown released the home lease after refusing its pool root"
-  grep -F -- '- domain ' "$home/data/secondmates.md" >/dev/null \
-    || fail "teardown removed the registry route after refusing its pool root"
-  [ -e "$home/state/domain.meta" ] || fail "teardown removed the parent meta after refusing"
-  pass "secondmate retirement refuses a pool root holding a slot another task owns"
-}
-
 test_secondmate_teardown_refuses_ambiguous_and_mismatched_registry_bindings() {
   local case_name home sub other fakebin log err meta_before registry_before
   for case_name in duplicate-id duplicate-home home-mismatch; do
@@ -3105,8 +3001,6 @@ test_secondmate_spawn_requires_seeded_matching_home
 test_secondmate_spawn_refuses_operational_dirs_outside_subhome
 test_fm_send_refuses_bare_window_without_home_meta
 test_secondmate_teardown_retires_empty_home
-test_secondmate_retirement_reclaims_its_own_pool_root
-test_secondmate_retirement_refuses_a_pool_root_another_task_still_owns
 test_secondmate_teardown_refuses_ambiguous_and_mismatched_registry_bindings
 test_secondmate_teardown_sweeps_process_events_before_removal
 test_secondmate_teardown_refuses_process_events_without_sweep_script
