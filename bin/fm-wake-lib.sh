@@ -1243,8 +1243,9 @@ fm_firstmate_root_home() {
 # that rather than relying on Treehouse to skip an unrecognized entry. The cost
 # is that a bare `treehouse prune` no longer reaches a secondmate's stale
 # slots; reclaiming them takes an explicit
-# `treehouse prune --all --root $HOME/.treehouse-homes/<dir>` per listed
-# directory, which docs/architecture.md states for the operator.
+# `treehouse prune --all --yes --root $HOME/.treehouse-homes/<dir>` per listed
+# directory - that prune is a dry run without `--yes` - which
+# docs/architecture.md states for the operator.
 #
 # This is derived fresh from the home itself on every call rather than read
 # from stored configuration, so it needs no seeding step, is identical across a
