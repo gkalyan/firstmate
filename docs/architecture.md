@@ -283,6 +283,8 @@ The signal cannot be mixed with project names or omitted accidentally, and a pop
 Herdr secondmate and child placement follows the launcher-binding contract in [Watching and task containers](herdr-backend.md#watching-and-task-containers).
 When seeded with `-`, the home is a durable treehouse lease under the secondmate id, so it survives with no live process and is not recycled by later `treehouse get` or pruning.
 Retirement or seed rollback returns the leased home; normal restart/recovery keeps it leased.
+A secondmate home's crewmate spawns take pooled worktrees from a Treehouse root private to that home, `$HOME/.treehouse-homes/<secondmate-id>-<hash-of-home-path>`, so two homes that each clone the same project never resolve to one pool and never hand each other a worktree of the wrong clone; the home path rather than the id carries the uniqueness, because an id is unique only within the registry of the home that seeded it.
+Those roots sit beside `~/.treehouse` rather than inside it, so a bare `treehouse status` or `treehouse prune` still reports exactly the primary's own pools: list `$HOME/.treehouse-homes/` to see which homes hold pools, and reclaim a stale slot in one with `treehouse prune --all --root $HOME/.treehouse-homes/<dir>`.
 If returning the lease fails during teardown, firstmate leaves the route and home intact instead of hiding a still-held lease.
 Seeding is transactional: if validation, cloning, initialization, or registry update fails, generated briefs, new homes, new project clones, and registry edits are rolled back.
 `local-only` projects stay with the main first mate because they merge into the main local checkout instead of a remote-backed PR path.

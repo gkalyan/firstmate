@@ -369,6 +369,7 @@ META_LOCK=
 META_LOCK_HELD=0
 DESCENDANT_LOCK_PATHS=()
 DESCENDANT_TASK_STATES=()
+DESCENDANT_TASK_OWNER_HOMES=()
 DESCENDANT_TASK_IDS=()
 DESCENDANT_TASK_KINDS=()
 DESCENDANT_TASK_HOMES=()
@@ -2700,6 +2701,7 @@ collect_descendant_task_locks() {
       [ -n "$child_home" ] || child_home=$child_wt
     fi
     DESCENDANT_TASK_STATES+=("$sub_state")
+    DESCENDANT_TASK_OWNER_HOMES+=("$home")
     DESCENDANT_TASK_IDS+=("$child_id")
     DESCENDANT_TASK_KINDS+=("$child_kind")
     DESCENDANT_TASK_HOMES+=("$child_home")
@@ -2712,6 +2714,7 @@ collect_descendant_task_locks() {
 preflight_descendant_task_locks() {
   local home=$1 i state task_id meta control_lock meta_lock kind child_wt child_home
   DESCENDANT_TASK_STATES=()
+  DESCENDANT_TASK_OWNER_HOMES=()
   DESCENDANT_TASK_IDS=()
   DESCENDANT_TASK_KINDS=()
   DESCENDANT_TASK_HOMES=()
@@ -2766,9 +2769,10 @@ preflight_descendant_task_locks() {
 }
 
 preflight_descendant_treehouse_slots() {
-  local i state task_id meta kind backend target worktree project lock_path held owner_rc
+  local i state owner_home task_id meta kind backend target worktree project lock_path held owner_rc
   for ((i=0; i < ${#DESCENDANT_TASK_IDS[@]}; i++)); do
     state=${DESCENDANT_TASK_STATES[$i]}
+    owner_home=${DESCENDANT_TASK_OWNER_HOMES[$i]}
     task_id=${DESCENDANT_TASK_IDS[$i]}
     meta="$state/$task_id.meta"
     kind=$(meta_value "$meta" kind)
@@ -2782,7 +2786,11 @@ preflight_descendant_treehouse_slots() {
     if ! fm_treehouse_pool_slot "$project" "$worktree"; then
       continue
     fi
-    lock_path=$(fm_treehouse_project_lock_path "$project") || {
+    # Derived from the home that OWNS the task, not this one: a descendant with
+    # its own Treehouse pool root takes a different lock than the tearing-down
+    # home would, and locking the wrong one would leave its allocation
+    # unserialized (bin/fm-wake-lib.sh's fm_treehouse_project_lock_path).
+    lock_path=$(fm_treehouse_project_lock_path "$project" "$owner_home") || {
       echo "REFUSED: cannot resolve the shared Treehouse project lock for child $task_id; forced teardown changed nothing" >&2
       return 1
     }

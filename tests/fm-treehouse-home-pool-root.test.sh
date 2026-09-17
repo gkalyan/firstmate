@@ -12,9 +12,17 @@
 # bin/fm-wake-lib.sh's fm_treehouse_home_pool_root derives a Treehouse pool
 # root private to a secondmate home and nothing for any other home, and
 # bin/fm-spawn.sh passes that root to `treehouse get` only when one is
-# derived. These tests pin the pure derivation and the exact acquire command
-# bin/fm-spawn.sh sends to the pane, so a primary home's command stays
-# byte-identical and a secondmate home's carries its own --root.
+# derived. The root's uniqueness comes from the home's own absolute path, not
+# its marker id, because an id is unique only inside the registry of the home
+# that seeded it - two homes seeded by different parents can carry one id.
+# fm_treehouse_project_lock_path folds that same root into the slot-allocation
+# lock's identity, so the lock boundary and the pool boundary are derived from
+# one fact and homes with disjoint pools never refuse each other's spawns.
+#
+# These tests pin the pure derivation, the lock identity that follows it, and
+# the exact acquire command bin/fm-spawn.sh sends to the pane, so a primary
+# home's command and lock stay byte-identical and a secondmate home's carry
+# its own root.
 set -u
 
 # shellcheck source=tests/fixtures.sh
@@ -35,6 +43,33 @@ derive() {
     "$WAKE_LIB" "$home"
 }
 
+# derive_lock <home> <project> <user-home>: fm_treehouse_project_lock_path's
+# stdout for <project> resolved from <home>; "REFUSED" on any non-zero exit.
+derive_lock() {
+  local home=$1 project=$2 user_home=$3
+  mkdir -p "$user_home"
+  FM_ROOT_OVERRIDE='' FM_HOME="$home" HOME="$user_home" \
+    bash -c '. "$1"; fm_treehouse_project_lock_path "$2" || echo REFUSED' _ \
+    "$WAKE_LIB" "$project"
+}
+
+# make_lock_project <dir> <origin>: a git repo at <dir> whose origin is <origin>.
+make_lock_project() {
+  local dir=$1 origin=$2
+  git init --quiet -b main "$dir"
+  git -C "$dir" remote add origin "$origin"
+}
+
+# make_child_home <dir> <parent> [id]: a home bound to <parent> by a local
+# parent record, carrying a secondmate marker when <id> is given.
+make_child_home() {
+  local dir=$1 parent=$2 id=${3:-}
+  mkdir -p "$dir/state"
+  printf 'schema=fm-secondmate-parent.v1\nroute=local\nparent_home=%s\n' "$parent" \
+    > "$dir/.fm-secondmate-parent"
+  [ -z "$id" ] || printf '%s\n' "$id" > "$dir/.fm-secondmate-home"
+}
+
 # --- pure derivation ---------------------------------------------------------
 
 test_primary_home_derives_no_pool_root() {
@@ -48,16 +83,46 @@ test_primary_home_derives_no_pool_root() {
 }
 
 test_secondmate_home_derives_a_root_under_its_own_home() {
-  local home user_home out expected
+  local home user_home out again
   home="$TMP_ROOT/secondmate-unit"
   user_home="$TMP_ROOT/secondmate-unit-userhome"
   mkdir -p "$home"
   printf 'followforge-sm\n' > "$home/.fm-secondmate-home"
   out=$(derive "$home" "$user_home")
-  expected="$user_home/.treehouse-homes/followforge-sm"
-  [ "$out" = "$expected" ] \
-    || fail "a secondmate home derived '$out', expected '$expected'"
-  pass "a secondmate home derives a pool root private to its own id"
+  case "$out" in
+    "$user_home/.treehouse-homes/followforge-sm-"*) ;;
+    *) fail "a secondmate home derived '$out', expected a \$HOME/.treehouse-homes/followforge-sm-<hash> root" ;;
+  esac
+  case "$out" in
+    */.treehouse-homes/*/*) fail "a secondmate pool root is not a single directory under .treehouse-homes: $out" ;;
+  esac
+  again=$(derive "$home" "$user_home")
+  [ "$again" = "$out" ] \
+    || fail "a secondmate home derived two different pool roots across calls: '$out' then '$again'"
+  pass "a secondmate home derives one stable pool root carrying its id"
+}
+
+# The regression the id-keyed derivation had: bin/fm-home-seed.sh rejects a
+# duplicate id only within the seeding home's own registry, so a secondmate of
+# the primary and a secondmate of that secondmate can both be called
+# 'followforge'. Keyed on the id alone they derived one root, cloned one
+# origin, and landed back in a single Treehouse pool - the exact collision this
+# change exists to remove.
+test_same_id_homes_in_different_subtrees_derive_different_roots() {
+  local user_home homeA homeB outA outB
+  user_home="$TMP_ROOT/same-id-userhome"
+  homeA="$TMP_ROOT/same-id-parent-child"
+  homeB="$TMP_ROOT/same-id-parent-child/nested-child"
+  mkdir -p "$homeA" "$homeB"
+  printf 'followforge\n' > "$homeA/.fm-secondmate-home"
+  printf 'followforge\n' > "$homeB/.fm-secondmate-home"
+  outA=$(derive "$homeA" "$user_home")
+  outB=$(derive "$homeB" "$user_home")
+  [ "$outA" != REFUSED ] || fail "secondmate home A derived nothing"
+  [ "$outB" != REFUSED ] || fail "secondmate home B derived nothing"
+  [ "$outA" != "$outB" ] \
+    || fail "two homes sharing the id 'followforge' derived the same pool root: $outA"
+  pass "two homes that share a marker id still derive different pool roots"
 }
 
 test_two_secondmate_homes_never_derive_the_same_root() {
@@ -76,15 +141,89 @@ test_two_secondmate_homes_never_derive_the_same_root() {
   pass "two secondmate homes on the same machine never derive the same pool root"
 }
 
-test_malformed_marker_id_is_refused_not_used_as_a_path() {
+# fm_root_is_secondmate_home's charset guard (bin/fm-primary-scope-lib.sh)
+# rejects any id outside [A-Za-z0-9._-], which is what refuses this one: the
+# separator, not the dots. A dot-only id such as '..' passes that guard, so
+# assert the property the derivation actually has - no id, malformed or not,
+# can name a directory other than a fresh one under .treehouse-homes, because
+# the home-path hash is always appended.
+test_marker_id_outside_the_portable_charset_is_refused() {
   local home out
   home="$TMP_ROOT/malformed-unit"
   mkdir -p "$home"
   printf '../../escaped\n' > "$home/.fm-secondmate-home"
   out=$(derive "$home" "$TMP_ROOT/malformed-unit-userhome")
   [ "$out" = REFUSED ] \
-    || fail "a marker id with path-traversal characters was accepted into a derived path: $out"
-  pass "a malformed marker id is refused rather than folded into a derived path"
+    || fail "a marker id outside the portable charset was accepted into a derived path: $out"
+  pass "a marker id outside the portable charset is refused"
+}
+
+test_dot_only_marker_id_cannot_collapse_to_the_default_root() {
+  local home user_home out resolved
+  home="$TMP_ROOT/dot-id-unit"
+  user_home="$TMP_ROOT/dot-id-userhome"
+  mkdir -p "$home"
+  printf '..\n' > "$home/.fm-secondmate-home"
+  out=$(derive "$home" "$user_home")
+  [ "$out" != REFUSED ] || fail "a dot-only marker id derived nothing at all"
+  mkdir -p "$out"
+  resolved=$(CDPATH='' cd -- "$out" && pwd -P)
+  [ "$resolved" != "$user_home" ] \
+    || fail "a marker id of '..' collapsed the pool root back to the shared default root"
+  case "$resolved" in
+    "$user_home/.treehouse-homes/"*) ;;
+    *) fail "a dot-only marker id escaped .treehouse-homes: $resolved" ;;
+  esac
+  pass "a dot-only marker id cannot collapse the pool root to the default root"
+}
+
+# --- the slot-allocation lock that must follow the pool boundary -------------
+
+test_primary_home_lock_path_is_unchanged_by_private_pool_roots() {
+  local home user_home project out
+  home="$TMP_ROOT/lock-primary"
+  user_home="$TMP_ROOT/lock-primary-userhome"
+  project="$TMP_ROOT/lock-primary-project"
+  mkdir -p "$home/state"
+  make_lock_project "$project" 'https://example.invalid/followforge.git'
+  out=$(derive_lock "$home" "$project" "$user_home")
+  [ "$out" = "$home/state/.treehouse-project-$(printf '%s' 'https://example.invalid/followforge.git' | git hash-object --stdin).lock" ] \
+    || fail "a primary home's project lock is no longer keyed on the origin alone: $out"
+  pass "a primary home's project lock stays keyed on the origin alone"
+}
+
+# The lock's own comment justifies its identity as "every home on this machine
+# that can reach the same pool derives the identical path". A home with a
+# private pool root reaches no other home's pool, so it must not share the
+# lock: without this, the primary and a secondmate spawning for the same origin
+# within the same moment hard-refuse each other over disjoint pools.
+test_homes_with_disjoint_pool_roots_take_disjoint_project_locks() {
+  local root user_home projP projA projB outP outA outB out homeA homeB
+  root="$TMP_ROOT/lock-tree"
+  user_home="$TMP_ROOT/lock-tree-userhome"
+  homeA="$root/child-a"
+  homeB="$root/child-a/child-b"
+  mkdir -p "$root/state"
+  make_child_home "$homeA" "$root" followforge
+  make_child_home "$homeB" "$homeA" followforge
+  projP="$TMP_ROOT/lock-tree-proj-p"
+  projA="$TMP_ROOT/lock-tree-proj-a"
+  projB="$TMP_ROOT/lock-tree-proj-b"
+  make_lock_project "$projP" 'https://example.invalid/followforge.git'
+  make_lock_project "$projA" 'https://example.invalid/followforge.git'
+  make_lock_project "$projB" 'https://example.invalid/followforge.git'
+  outP=$(derive_lock "$root" "$projP" "$user_home")
+  outA=$(derive_lock "$homeA" "$projA" "$user_home")
+  outB=$(derive_lock "$homeB" "$projB" "$user_home")
+  for out in "$outP" "$outA" "$outB"; do
+    [ "$out" != REFUSED ] || fail "a project lock failed to resolve in the home tree"
+    case "$out" in "$root/state/"*) ;; *) fail "a project lock left the root home's state dir: $out" ;; esac
+  done
+  [ "$outP" != "$outA" ] \
+    || fail "the primary and a secondmate with a private pool root took the same project lock: $outP"
+  [ "$outA" != "$outB" ] \
+    || fail "two same-id secondmate homes with disjoint pool roots took the same project lock: $outA"
+  pass "homes with disjoint pool roots take disjoint project locks under one anchor"
 }
 
 # --- what bin/fm-spawn.sh actually sends to the pane -------------------------
@@ -205,7 +344,7 @@ test_secondmate_home_spawn_sends_its_own_root() {
 
   # fm_test_run_spawn always runs the launch with HOME=<home>/user-home
   # (tests/fixtures.sh), so that is the base the fix derives the root under.
-  expected_root="$HOME_DIR/user-home/.treehouse-homes/followforge-sm"
+  expected_root="$HOME_DIR/user-home/.treehouse-homes/followforge-sm-$(printf '%s' "$(CDPATH='' cd -- "$HOME_DIR" && pwd -P)" | git hash-object --stdin)"
   line=$(treehouse_acquire_line)
   [ "$line" = "treehouse get --root '$expected_root'" ] \
     || fail "a secondmate home's acquire command did not carry its own pool root: got '$line'"
@@ -215,7 +354,11 @@ test_secondmate_home_spawn_sends_its_own_root() {
 test_primary_home_derives_no_pool_root
 test_secondmate_home_derives_a_root_under_its_own_home
 test_two_secondmate_homes_never_derive_the_same_root
-test_malformed_marker_id_is_refused_not_used_as_a_path
+test_same_id_homes_in_different_subtrees_derive_different_roots
+test_marker_id_outside_the_portable_charset_is_refused
+test_dot_only_marker_id_cannot_collapse_to_the_default_root
+test_primary_home_lock_path_is_unchanged_by_private_pool_roots
+test_homes_with_disjoint_pool_roots_take_disjoint_project_locks
 test_primary_home_spawn_sends_the_unmodified_acquire_command
 test_secondmate_home_spawn_sends_its_own_root
 
