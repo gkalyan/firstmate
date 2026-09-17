@@ -2521,6 +2521,63 @@ remove_firstmate_home() {
   return 1
 }
 
+# Reclaim the private Treehouse pool root a retiring secondmate home's own
+# spawns filled.
+#
+# The root is derived by the same fm_treehouse_home_pool_root (bin/fm-wake-lib.sh)
+# that the spawn path passes to `treehouse get`, never reassembled here, so what
+# is removed is exactly what that home created and nothing else. A home that
+# never derived one, or never spawned into it, leaves nothing to reclaim and
+# this is a no-op.
+#
+# Ownership evidence is the same evidence require_exclusive_worktree_slot_record
+# reads - every locally reachable home's task records, their worktree= and home=
+# fields - so the descendant-slot ownership contract is unchanged: a record
+# still naming anything under the root means a slot may be live, and the root
+# is left whole. It runs after any forced child cleanup, so the records a
+# --force retirement is meant to discard are already gone, and before the
+# home, its lease, its route, and its endpoint are touched, so a refusal here
+# leaves the retirement recoverable; an unreadable or unexpected root refuses
+# for the same reason.
+reclaim_secondmate_pool_root() {  # <home>
+  local home=$1 root abs_root state_dir other other_id field other_path other_abs
+  root=$(fm_treehouse_home_pool_root "$home" 2>/dev/null) || return 0
+  [ -n "$root" ] || return 0
+  if [ -L "$root" ]; then
+    echo "REFUSED: secondmate $ID's Treehouse pool root $root is a symbolic link, so what it names cannot be proved to be its own pool; nothing was changed." >&2
+    return 1
+  fi
+  [ -e "$root" ] || return 0
+  if [ ! -d "$root" ]; then
+    echo "REFUSED: secondmate $ID's Treehouse pool root $root is not a directory; nothing was changed." >&2
+    return 1
+  fi
+  abs_root=$(canonical_existing_dir "$root") || {
+    echo "REFUSED: secondmate $ID's Treehouse pool root $root could not be resolved; nothing was changed." >&2
+    return 1
+  }
+  validate_removal_target "$abs_root" "secondmate Treehouse pool root" >/dev/null || return 1
+  collect_local_firstmate_states "$STATE" || return 1
+  for state_dir in "${TREEHOUSE_OWNER_STATES[@]}"; do
+    for other in "$state_dir"/*.meta; do
+      [ -f "$other" ] && [ ! -L "$other" ] || continue
+      other_id=$(basename "$other" .meta)
+      [ "$other" != "$META" ] || continue
+      for field in worktree home; do
+        other_path=$(fm_meta_get "$other" "$field")
+        [ -n "$other_path" ] || continue
+        other_abs=$(canonical_existing_dir "$other_path") || continue
+        [ "$other_abs" = "$abs_root" ] || path_is_ancestor_of "$abs_root" "$other_abs" || continue
+        echo "REFUSED: task $other_id's recorded $field $other_abs is inside secondmate $ID's Treehouse pool root $abs_root." >&2
+        echo "Removing that root would destroy a pool slot $other_id may still own, so nothing was changed - not even with --force." >&2
+        echo "Reconcile that record (bin/fm-crew-state.sh $other_id), then re-run teardown." >&2
+        return 1
+      done
+    done
+  done
+  rm -rf -- "$abs_root"
+}
+
 firstmate_home_has_process_events() {
   local home=$1 path owner claim_root
   for path in "$home/state/procevent"/*.source "$home/state/procevent"/*.runner; do
@@ -3217,6 +3274,10 @@ fi
 
 if [ "$KIND" = secondmate ] && [ "$FORCE" = "--force" ]; then
   cleanup_firstmate_home_children "$HOME_PATH" || exit $?
+fi
+
+if [ "$KIND" = secondmate ]; then
+  reclaim_secondmate_pool_root "$HOME_PATH" || exit 1
 fi
 
 if [ "$KIND" = scout ] && [ "$FORCE" != "--force" ]; then
