@@ -1,0 +1,15 @@
+ok - a primary home derives no Treehouse pool root
+ok - a secondmate home derives one stable pool root carrying its id
+ok - two secondmate homes on the same machine never derive the same pool root
+ok - two homes that share a marker id still derive different pool roots
+ok - a marker id outside the portable charset is refused
+ok - a dot-only marker id cannot collapse the pool root to the default root
+ok - a primary home's project lock stays keyed on the origin alone
+ok - homes with disjoint pool roots take disjoint project locks under one anchor
+ok - a primary home sends the exact unmodified 'treehouse get' acquire command
+ok - a secondmate home's acquire command carries its own distinct --root
+# all fm-treehouse-home-pool-root tests passed
+
+== the acquire command bin/fm-spawn.sh actually sent to the pane ==
+primary-e2e:     treehouse get
+secondmate-e2e:  treehouse get --root '/private/var/folders/b9/kh_24b7n4fj5qzmhc1sr5b2c0000gn/T/fm-treehouse-home-pool-root.SsDAwy/secondmate-e2e/home/user-home/.treehouse-homes/followforge-sm-25aff08246ac31e768adc22c714dafe9f9bebb2f'

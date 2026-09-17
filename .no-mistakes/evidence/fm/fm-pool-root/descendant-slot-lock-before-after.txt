@@ -1,0 +1,21 @@
+# forced secondmate retirement vs the descendant home's own Treehouse slot lock
+# (tests/fm-treehouse-home-pool-root.test.sh, new case)
+
+## with bin/fm-teardown.sh from the base commit 69d660a (no owner-home argument)
+$ bash tests/fm-treehouse-home-pool-root.test.sh
+not ok - forced retirement returned a descendant's pool slot while that home held its own allocation lock
+
+## with bin/fm-teardown.sh from this branch
+$ bash tests/fm-treehouse-home-pool-root.test.sh
+ok - a primary home derives no Treehouse pool root
+ok - a secondmate home derives one stable pool root carrying its id
+ok - two secondmate homes on the same machine never derive the same pool root
+ok - two homes that share a marker id still derive different pool roots
+ok - a marker id outside the portable charset is refused
+ok - a dot-only marker id cannot collapse the pool root to the default root
+ok - a primary home's project lock stays keyed on the origin alone
+ok - homes with disjoint pool roots take disjoint project locks under one anchor
+ok - a forced retirement serializes on the descendant home's own Treehouse project lock
+ok - a primary home sends the exact unmodified 'treehouse get' acquire command
+ok - a secondmate home's acquire command carries its own distinct --root
+# all fm-treehouse-home-pool-root tests passed

@@ -1,0 +1,74 @@
+treehouse v2.3.0   git 2.44.0
+sandbox HOME: $HOME -> /var/folders/b9/kh_24b7n4fj5qzmhc1sr5b2c0000gn/T//fm-poolroot-evi.P5k0dq/user-home
+
+== setup: one origin, two firstmate homes, each with its OWN clone named FollowForge ==
+home A clone .git : /private/var/folders/b9/kh_24b7n4fj5qzmhc1sr5b2c0000gn/T/fm-poolroot-evi.P5k0dq/homeA/projects/FollowForge/.git
+home B clone .git : /private/var/folders/b9/kh_24b7n4fj5qzmhc1sr5b2c0000gn/T/fm-poolroot-evi.P5k0dq/homeB/projects/FollowForge/.git
+both origins      : /var/folders/b9/kh_24b7n4fj5qzmhc1sr5b2c0000gn/T//fm-poolroot-evi.P5k0dq/origin.git
+
+== BEFORE: both homes send the bare 'treehouse get' (what fm-spawn.sh sent before this change) ==
+one shared pool, slots built from whichever clone got there first:
+1     available    /var/folders/b9/kh_24b7n4fj5qzmhc1sr5b2c0000gn/T/fm-poolroot-evi.P5k0dq/user-home/.treehouse/FollowForge-f4ce34/1/FollowForge
+2     available    /var/folders/b9/kh_24b7n4fj5qzmhc1sr5b2c0000gn/T/fm-poolroot-evi.P5k0dq/user-home/.treehouse/FollowForge-f4ce34/2/FollowForge
+
+home B spawns again into that shared pool:
+  handed  : /var/folders/b9/kh_24b7n4fj5qzmhc1sr5b2c0000gn/T/fm-poolroot-evi.P5k0dq/user-home/.treehouse/FollowForge-f4ce34/1/FollowForge
+  its git-common-dir : /private/var/folders/b9/kh_24b7n4fj5qzmhc1sr5b2c0000gn/T/fm-poolroot-evi.P5k0dq/homeA/projects/FollowForge/.git
+  home B's own clone : /private/var/folders/b9/kh_24b7n4fj5qzmhc1sr5b2c0000gn/T/fm-poolroot-evi.P5k0dq/homeB/projects/FollowForge/.git
+  -> a worktree of the OTHER home's clone.
+
+the worker launch firstmate then attempts:
+error: refusing to pre-register Claude trust: '/private/var/folders/b9/kh_24b7n4fj5qzmhc1sr5b2c0000gn/T/fm-poolroot-evi.P5k0dq/user-home/.treehouse/FollowForge-f4ce34/1/FollowForge' is not a worktree of project '/private/var/folders/b9/kh_24b7n4fj5qzmhc1sr5b2c0000gn/T/fm-poolroot-evi.P5k0dq/homeB/projects/FollowForge'
+  fm-claude-trust.sh exit=1  (home B can dispatch nothing for this project)
+
+== AFTER: the pool root bin/fm-wake-lib.sh now derives per home ==
+home A (primary)   : exit=1 -> no root, fm-spawn.sh keeps sending plain 'treehouse get'
+home B (secondmate): /var/folders/b9/kh_24b7n4fj5qzmhc1sr5b2c0000gn/T//fm-poolroot-evi.P5k0dq/user-home/.treehouse-homes/followforge-ece90b076c1b3d6dac718f097830c213aeb306f8
+
+home B spawns with the command fm-spawn.sh now sends:
+  $ treehouse get --root '/var/folders/b9/kh_24b7n4fj5qzmhc1sr5b2c0000gn/T//fm-poolroot-evi.P5k0dq/user-home/.treehouse-homes/followforge-ece90b076c1b3d6dac718f097830c213aeb306f8'
+  handed  : /var/folders/b9/kh_24b7n4fj5qzmhc1sr5b2c0000gn/T/fm-poolroot-evi.P5k0dq/user-home/.treehouse-homes/followforge-ece90b076c1b3d6dac718f097830c213aeb306f8/.treehouse/FollowForge-f4ce34/1/FollowForge
+  its git-common-dir : /private/var/folders/b9/kh_24b7n4fj5qzmhc1sr5b2c0000gn/T/fm-poolroot-evi.P5k0dq/homeB/projects/FollowForge/.git
+  home B's own clone : /private/var/folders/b9/kh_24b7n4fj5qzmhc1sr5b2c0000gn/T/fm-poolroot-evi.P5k0dq/homeB/projects/FollowForge/.git
+  -> a worktree of home B's OWN clone.
+
+the same worker launch:
+trusted: /private/var/folders/b9/kh_24b7n4fj5qzmhc1sr5b2c0000gn/T/fm-poolroot-evi.P5k0dq/user-home/.treehouse-homes/followforge-ece90b076c1b3d6dac718f097830c213aeb306f8/.treehouse/FollowForge-f4ce34/1/FollowForge
+trusted (project root): /private/var/folders/b9/kh_24b7n4fj5qzmhc1sr5b2c0000gn/T/fm-poolroot-evi.P5k0dq/homeB/projects/FollowForge
+  fm-claude-trust.sh exit=0  (home B dispatches)
+
+== the primary's bare view is untouched ==
+$ treehouse status        (from home A's clone, no --root)
+1     leased       /var/folders/b9/kh_24b7n4fj5qzmhc1sr5b2c0000gn/T/fm-poolroot-evi.P5k0dq/user-home/.treehouse/FollowForge-f4ce34/1/FollowForge  (held by homeB-2)
+2     available    /var/folders/b9/kh_24b7n4fj5qzmhc1sr5b2c0000gn/T/fm-poolroot-evi.P5k0dq/user-home/.treehouse/FollowForge-f4ce34/2/FollowForge
+-> only $HOME/.treehouse pools; the secondmate's root is never listed.
+
+== the operator reclaim docs/architecture.md now documents ==
+$ treehouse prune --all --root $HOME/.treehouse-homes/<dir>      (no --yes)
+🌳 Dry run: would prune 1 stale worktree across 1 pool and reclaim 372 B.
+1     372 B  /var/folders/b9/kh_24b7n4fj5qzmhc1sr5b2c0000gn/T/fm-poolroot-evi.P5k0dq/user-home/.treehouse-homes/followforge-ece90b076c1b3d6dac718f097830c213aeb306f8/.treehouse/FollowForge-f4ce34/1/FollowForge
+🌳 Re-run with --all --yes to delete these worktrees.
+  on disk after  : 1 pool slot dir(s) remain
+
+$ treehouse prune --all --yes --root $HOME/.treehouse-homes/<dir>
+🌳 Pruned 1 stale worktree across 1 pool and freed 372 B.
+1     372 B  /var/folders/b9/kh_24b7n4fj5qzmhc1sr5b2c0000gn/T/fm-poolroot-evi.P5k0dq/user-home/.treehouse-homes/followforge-ece90b076c1b3d6dac718f097830c213aeb306f8/.treehouse/FollowForge-f4ce34/1/FollowForge
+  on disk after  : 0 pool slot dir(s) remain
+
+== adversarial: two DIFFERENT homes carrying the SAME secondmate id ==
+home B root: /var/folders/b9/kh_24b7n4fj5qzmhc1sr5b2c0000gn/T//fm-poolroot-evi.P5k0dq/user-home/.treehouse-homes/followforge-ece90b076c1b3d6dac718f097830c213aeb306f8
+home C root: /var/folders/b9/kh_24b7n4fj5qzmhc1sr5b2c0000gn/T//fm-poolroot-evi.P5k0dq/user-home/.treehouse-homes/followforge-e0c4dc230d10efa4ea418d66fe7503237f4c77b8
+-> still disjoint; the id alone would have collided them.
+home C handed      : /var/folders/b9/kh_24b7n4fj5qzmhc1sr5b2c0000gn/T/fm-poolroot-evi.P5k0dq/user-home/.treehouse-homes/followforge-e0c4dc230d10efa4ea418d66fe7503237f4c77b8/.treehouse/FollowForge-f4ce34/1/FollowForge
+  git-common-dir   : /private/var/folders/b9/kh_24b7n4fj5qzmhc1sr5b2c0000gn/T/fm-poolroot-evi.P5k0dq/homeC/projects/FollowForge/.git
+  home C own clone : /private/var/folders/b9/kh_24b7n4fj5qzmhc1sr5b2c0000gn/T/fm-poolroot-evi.P5k0dq/homeC/projects/FollowForge/.git
+
+== adversarial: a marker id outside the portable charset ==
+exit=1 -> refused, no path derived; the spawn falls back to the unmodified 'treehouse get'.
+
+== slot-allocation lock: base commit 69d660a vs this branch ==
+home A base   : /private/var/folders/b9/kh_24b7n4fj5qzmhc1sr5b2c0000gn/T/fm-poolroot-evi.P5k0dq/homeA/state/.treehouse-project-edc4577f6490f2e19ddabfd75a06811fd3aa3db4.lock
+home A branch : /private/var/folders/b9/kh_24b7n4fj5qzmhc1sr5b2c0000gn/T/fm-poolroot-evi.P5k0dq/homeA/state/.treehouse-project-edc4577f6490f2e19ddabfd75a06811fd3aa3db4.lock
+home B base   : /private/var/folders/b9/kh_24b7n4fj5qzmhc1sr5b2c0000gn/T/fm-poolroot-evi.P5k0dq/homeB/state/.treehouse-project-edc4577f6490f2e19ddabfd75a06811fd3aa3db4.lock
+home B branch : /private/var/folders/b9/kh_24b7n4fj5qzmhc1sr5b2c0000gn/T/fm-poolroot-evi.P5k0dq/homeB/state/.treehouse-project-8e5da5f1299499058d6fb198c53933fb0faf807f.lock
+-> the primary's lock is byte-identical; the secondmate's follows its private pool.
