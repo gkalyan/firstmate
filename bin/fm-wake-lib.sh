@@ -1232,6 +1232,57 @@ fm_treehouse_project_lock_path() {  # <project-dir>
   printf '%s/.treehouse-project-%s.lock\n' "$root/state" "$hash"
 }
 
+# A distinct Treehouse pool root for a secondmate home, or nothing for a
+# primary home.
+#
+# Treehouse's own pool identity is <basename>-<hash-of-origin>, so two homes
+# that each clone the same project into a same-named local directory (the
+# ordinary case: every home's own project clone is named after the project)
+# resolve to the SAME pool under Treehouse's shared default root, and whichever
+# home's clone got there first owns every slot. A spawn from the other home is
+# then handed a worktree of a project directory it does not own, which Claude's
+# workspace-trust pre-registration (bin/fm-claude-trust.sh) correctly refuses
+# to launch into rather than silently trusting. Passing a home-distinct --root
+# to `treehouse get` sidesteps the collision entirely: Treehouse's own
+# <basename>-<hash> naming inside that root is untouched, but the root itself
+# is now private to the home, so the two homes never share a pool at all.
+#
+# A primary home returns failure here on purpose: it never declared a distinct
+# root before this existed, its live pools and worktrees already sit under
+# Treehouse's ordinary default resolution (--root/TREEHOUSE_ROOT/config, or
+# Treehouse's own built-in default), and a primary is not a place two homes'
+# clones of the same project collide - only a secondmate cloning a project the
+# primary (or another secondmate) also clones can hit that collision. Callers
+# treat failure as "pass nothing", which is byte-identical to every spawn
+# before this function existed.
+#
+# The chosen root, $HOME/.treehouse-homes/<secondmate-id>, is deliberately NOT
+# nested inside Treehouse's own default root (~/.treehouse): an operator
+# running a bare `treehouse status`/`prune` there (the ordinary, root-less
+# invocation) must keep seeing exactly the primary's own pools, never a
+# secondmate's, and a sibling directory guarantees that rather than relying on
+# Treehouse to skip an unrecognized entry.
+#
+# This is derived fresh from the home's own marker on every call rather than
+# read from stored configuration, so it needs no seeding step, is identical
+# across a relaunch or restart, and there is nothing to propagate through the
+# inherited-local-material contract (bin/fm-config-inherit-lib.sh) - a value
+# that must differ per home is exactly what that contract must not mirror
+# downstream, and a derived, never-stored value cannot be mirrored at all.
+fm_treehouse_home_pool_root() {  # [home]
+  local home=${1:-$FM_HOME} id
+  home=$(CDPATH='' cd -- "$home" 2>/dev/null && pwd -P) || return 1
+  if ! command -v fm_root_is_secondmate_home >/dev/null 2>&1; then
+    # shellcheck source=bin/fm-primary-scope-lib.sh
+    . "$FM_WAKE_LIB_DIR/fm-primary-scope-lib.sh"
+  fi
+  fm_root_is_secondmate_home "$home" || return 1
+  IFS= read -r id < "$home/.fm-secondmate-home" 2>/dev/null || return 1
+  id=${id//[[:space:]]/}
+  [ -n "$id" ] || return 1
+  printf '%s/.treehouse-homes/%s\n' "$HOME" "$id"
+}
+
 # A Treehouse slot has the managed pool's fixed <pool>/<slot>/<repo> layout.
 # Require both its pool state and the same Git common directory as the recorded
 # project; an ordinary linked worktree is not evidence that Treehouse owns it.

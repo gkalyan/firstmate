@@ -3464,7 +3464,19 @@ if [ "$RELAUNCH" -eq 1 ]; then
   fi
   [ "$KIND" = secondmate ] || validate_spawn_worktree "relaunch" "$T"
 elif [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
-  spawn_send_text_line "$WT_TARGET" 'treehouse get'
+  # A secondmate home gets its own Treehouse pool root so its clone of a
+  # project the primary (or another secondmate) also clones never resolves to
+  # the same pool; see fm_treehouse_home_pool_root (bin/fm-wake-lib.sh) for why.
+  # A primary home, or any home the function does not recognize as a
+  # secondmate, gets nothing and this sends the exact same bare command as
+  # before the function existed.
+  spawn_treehouse_get_cmd='treehouse get'
+  if spawn_treehouse_root=$(fm_treehouse_home_pool_root "$FM_HOME" 2>/dev/null) \
+     && [ -n "$spawn_treehouse_root" ]; then
+    spawn_treehouse_root_q=${spawn_treehouse_root//\'/\'\\\'\'}
+    spawn_treehouse_get_cmd="treehouse get --root '$spawn_treehouse_root_q'"
+  fi
+  spawn_send_text_line "$WT_TARGET" "$spawn_treehouse_get_cmd"
 
   # Wait for the treehouse subshell: the pane's cwd moves from the project to the worktree.
   # Target the stable window id, not the name: if the name is ever lost (e.g. an
