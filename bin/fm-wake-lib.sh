@@ -1202,6 +1202,73 @@ fm_firstmate_root_home() {
   printf '%s\n' "$home"
 }
 
+# A Treehouse pool root private to a secondmate home, or nothing for a
+# primary home.
+#
+# Treehouse's own pool identity is <basename>-<hash-of-origin>, so two homes
+# that each clone the same project into a same-named local directory (the
+# ordinary case: every home's own project clone is named after the project)
+# resolve to the SAME pool under Treehouse's shared default root, and whichever
+# home's clone got there first owns every slot. A spawn from the other home is
+# then handed a worktree of a project directory it does not own, which Claude's
+# workspace-trust pre-registration (bin/fm-claude-trust.sh) correctly refuses
+# to launch into rather than silently trusting. Passing a home-distinct --root
+# to `treehouse get` sidesteps the collision entirely: Treehouse's own
+# <basename>-<hash> naming inside that root is untouched, but the root itself
+# is now private to the home, so the two homes never share a pool at all.
+#
+# The root's identity is the home's own resolved absolute path, which is the
+# only thing that is unique across every home on this machine. The secondmate
+# marker id is NOT: bin/fm-home-seed.sh rejects a duplicate id only within the
+# seeding home's own registry, so a secondmate seeded by one home and a
+# secondmate seeded by another - including a secondmate of a secondmate - can
+# legitimately carry the same id and would otherwise land back in one shared
+# pool, which is exactly the collision this exists to prevent. The id is kept
+# as a leading path component purely so an operator listing
+# $HOME/.treehouse-homes/ can tell whose pools these are.
+#
+# A primary home returns failure here on purpose: it never declared a distinct
+# root before this existed, its live pools and worktrees already sit under
+# Treehouse's ordinary default resolution (--root/TREEHOUSE_ROOT/config, or
+# Treehouse's own built-in default), and a primary is not a place two homes'
+# clones of the same project collide - only a secondmate cloning a project the
+# primary (or another secondmate) also clones can hit that collision. Callers
+# treat failure as "pass nothing", which is byte-identical to every spawn
+# before this function existed.
+#
+# The chosen root is deliberately NOT nested inside Treehouse's own default
+# root (~/.treehouse): an operator running a bare `treehouse status`/`prune`
+# there (the ordinary, root-less invocation) must keep seeing exactly the
+# primary's own pools, never a secondmate's, and a sibling directory guarantees
+# that rather than relying on Treehouse to skip an unrecognized entry. The cost
+# is that a bare `treehouse prune` no longer reaches a secondmate's stale
+# slots; reclaiming them takes an explicit
+# `treehouse prune --all --yes --root $HOME/.treehouse-homes/<dir>` per listed
+# directory - that prune is a dry run without `--yes` - which
+# docs/architecture.md states for the operator.
+#
+# This is derived fresh from the home itself on every call rather than read
+# from stored configuration, so it needs no seeding step, is identical across a
+# relaunch or restart, and there is nothing to propagate through the
+# inherited-local-material contract (bin/fm-config-inherit-lib.sh) - a value
+# that must differ per home is exactly what that contract must not mirror
+# downstream, and a derived, never-stored value cannot be mirrored at all.
+fm_treehouse_home_pool_root() {  # [home]
+  local home=${1:-$FM_HOME} id hash
+  home=$(CDPATH='' cd -- "$home" 2>/dev/null && pwd -P) || return 1
+  if ! command -v fm_root_is_secondmate_home >/dev/null 2>&1; then
+    # shellcheck source=bin/fm-primary-scope-lib.sh
+    . "$FM_WAKE_LIB_DIR/fm-primary-scope-lib.sh"
+  fi
+  fm_root_is_secondmate_home "$home" || return 1
+  IFS= read -r id < "$home/.fm-secondmate-home" 2>/dev/null || return 1
+  id=${id//[[:space:]]/}
+  [ -n "$id" ] || return 1
+  hash=$(printf '%s' "$home" | git hash-object --stdin 2>/dev/null) || return 1
+  [ -n "$hash" ] || return 1
+  printf '%s/.treehouse-homes/%s-%s\n' "$HOME" "$id" "$hash"
+}
+
 # The one lock serializing Treehouse slot allocation and return for a project.
 #
 # It is anchored in the local root home's state directory so that every home on
@@ -1210,10 +1277,23 @@ fm_firstmate_root_home() {
 # derives the identical path. Its identity is the project's resolved origin, so
 # separate clones of one origin share a single lock; an origin-less local-only
 # project falls back to its own worktree top instead of failing to resolve.
-fm_treehouse_project_lock_path() {  # <project-dir>
-  local project=$1 root origin identity hash top
+#
+# A home with a private pool root (fm_treehouse_home_pool_root, just above)
+# reaches no other home's pool, so that root joins the identity: the lock
+# boundary and the pool boundary are then derived from the same fact and cannot
+# disagree, and two homes allocating slots in disjoint pools no longer refuse
+# each other. A home without one contributes nothing to the identity, so its
+# lock path is byte-identical to the one it derived before private roots
+# existed.
+#
+# The home is a parameter because a caller can be resolving another home's
+# lock: bin/fm-teardown.sh's descendant preflight locks tasks owned by
+# secondmate homes below it, and each of those must derive the lock its own
+# home would take, not the one the tearing-down home would.
+fm_treehouse_project_lock_path() {  # <project-dir> [home]
+  local project=$1 home=${2:-$FM_HOME} root origin identity hash top pool_root
   [ -d "$project" ] || return 1
-  root=$(fm_firstmate_root_home "$FM_HOME") || return 1
+  root=$(fm_firstmate_root_home "$home") || return 1
   origin=$(git -C "$project" remote get-url origin 2>/dev/null || true)
   if [ -n "$origin" ]; then
     case "$origin" in
@@ -1226,6 +1306,9 @@ fm_treehouse_project_lock_path() {  # <project-dir>
     top=$(git -C "$project" rev-parse --show-toplevel 2>/dev/null) || return 1
     top=$(CDPATH='' cd -- "$top" 2>/dev/null && pwd -P) || return 1
     identity=$top
+  fi
+  if pool_root=$(fm_treehouse_home_pool_root "$home" 2>/dev/null) && [ -n "$pool_root" ]; then
+    identity="$pool_root"$'\n'"$identity"
   fi
   hash=$(printf '%s' "$identity" | git hash-object --stdin 2>/dev/null) || return 1
   [ -d "$root/state" ] || return 1
