@@ -351,6 +351,133 @@ test_secondmate_home_spawn_sends_its_own_root() {
   pass "a secondmate home's acquire command carries its own distinct --root"
 }
 
+# --- the teardown side of the same lock --------------------------------------
+
+# make_forced_retirement_case <name>: a primary home holding one secondmate
+# home, that secondmate holding a crewmate task whose worktree is a Treehouse
+# pool slot of the secondmate's OWN clone. Echoes
+# "<case>|<primary-home>|<mate-home>|<mate-project>|<slot>|<user-home>".
+#
+# The fake tmux/treehouse stubs only record what teardown reached, so a run
+# that gets past the preflight is visible as a recorded `treehouse return`
+# rather than as a silently returned slot.
+make_forced_retirement_case() {  # <name> <mate-id> <child-id>
+  local name=$1 mate_id=$2 child=$3 dir home mate project slot user_home tool
+  dir="$TMP_ROOT/$name"
+  home="$dir/home"
+  mate="$dir/mate"
+  user_home="$dir/user-home"
+  mkdir -p "$home/state" "$home/data" "$home/config" "$dir/fakebin" \
+    "$mate/state" "$mate/data" "$mate/config" "$mate/projects" \
+    "$dir/pool/1" "$user_home"
+  : > "$dir/runtime.log"
+  for tool in tmux treehouse; do
+    cat > "$dir/fakebin/$tool" <<SH
+#!/usr/bin/env bash
+printf '$tool' >> "\${FM_RUNTIME_LOG:?}"
+printf ' <%s>' "\$@" >> "\${FM_RUNTIME_LOG:?}"
+printf '\n' >> "\${FM_RUNTIME_LOG:?}"
+exit 0
+SH
+    chmod +x "$dir/fakebin/$tool"
+  done
+
+  git init --quiet -b main "$dir/origin"
+  printf 'fixture\n' > "$dir/origin/tracked"
+  git -C "$dir/origin" add tracked
+  git -C "$dir/origin" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' \
+    commit -qm fixture
+
+  printf 'schema=fm-secondmate-parent.v1\nroute=local\nparent_home=%s\n' "$home" \
+    > "$mate/.fm-secondmate-parent"
+  printf '%s\n' "$mate_id" > "$mate/.fm-secondmate-home"
+  project="$mate/projects/project"
+  git clone -q "$dir/origin" "$project"
+  printf '%s\n' \
+    "- $mate_id - fixture (home: $mate; scope: test; projects: project; added 2026-01-01)" \
+    > "$home/data/secondmates.md"
+
+  # The pool slot is a worktree of the SECONDMATE's clone, which is the shape
+  # the private pool root now guarantees and the shape teardown must serialize.
+  slot="$dir/pool/1/project"
+  git -C "$project" worktree add -q --detach "$slot"
+  printf '{"worktrees":[{"name":"1","path":"%s"}]}\n' "$slot" > "$dir/pool/treehouse-state.json"
+  printf 'task=%s\nhome=%s\n' "$child" "$mate" > "$dir/pool/1/.fm-slot-owner"
+
+  fm_write_meta "$home/state/$mate_id.meta" \
+    "window=firstmate:fm-$mate_id" "endpoint_task_id=$mate_id" \
+    "worktree=$mate" "project=$mate" "home=$mate" \
+    "kind=secondmate" "mode=secondmate" "harness=echo" "yolo=off" "projects=project"
+  fm_write_meta "$mate/state/$child.meta" \
+    "window=firstmate:fm-$child" "endpoint_task_id=$child" \
+    "worktree=$slot" "project=$project" "kind=scout"
+
+  printf '%s|%s|%s|%s|%s|%s\n' "$dir" "$home" "$mate" "$project" "$slot" "$user_home"
+}
+
+# bin/fm-teardown.sh's preflight_descendant_treehouse_slots takes the slot
+# allocation lock for every descendant task before a forced retirement returns
+# that task's slot. The lock it must take is the one the task's OWN home
+# derives: a secondmate home with a private pool root derives a different lock
+# than the home running the teardown, so taking the tearing-down home's lock
+# would return a slot out from under a `treehouse get` running in the
+# descendant's home at that moment. Assert the refusal, not the derivation:
+# with the descendant home's own lock held, the forced retirement must change
+# nothing and must never reach `treehouse return`.
+test_forced_retirement_locks_the_descendants_own_project_lock() {
+  local rec dir home mate project slot user_home mate_id=mate-task child=child-task
+  local own_lock teardown_home_lock holder waited=0 rc
+  rec=$(make_forced_retirement_case forced-retirement-lock "$mate_id" "$child")
+  IFS='|' read -r dir home mate project slot user_home <<EOF
+$rec
+EOF
+
+  own_lock=$(FM_HOME="$mate" HOME="$user_home" \
+    bash -c '. "$1"; fm_treehouse_project_lock_path "$2"' _ "$WAKE_LIB" "$project") \
+    || fail "the descendant's own home could not resolve its project lock"
+  teardown_home_lock=$(FM_HOME="$home" HOME="$user_home" \
+    bash -c '. "$1"; fm_treehouse_project_lock_path "$2"' _ "$WAKE_LIB" "$project") \
+    || fail "the tearing-down home could not resolve a project lock"
+  [ "$own_lock" != "$teardown_home_lock" ] \
+    || fail "this case no longer proves the hazard: both homes derive one lock ($own_lock)"
+
+  # A slot allocation running in the descendant's home right now. Its own
+  # process group, because a forced retirement reaps the process tree it finds.
+  ( FM_HOME="$mate" HOME="$user_home" exec perl -e 'setpgrp(0, 0); exec @ARGV' \
+      bash -c '. "$1"; fm_lock_try_acquire "$2" || exit 1; : > "$3"; exec sleep 60' _ \
+      "$WAKE_LIB" "$own_lock" "$dir/lock-held" ) &
+  holder=$!
+  while [ ! -e "$dir/lock-held" ] && [ "$waited" -lt 100 ]; do
+    sleep 0.1
+    waited=$((waited + 1))
+  done
+  [ -e "$dir/lock-held" ] || fail "the descendant's home never took its own project lock"
+
+  set +e
+  FM_HOME="$home" HOME="$user_home" FM_ROOT_OVERRIDE="$ROOT" FM_TEST_BLOCK_KILL=1 \
+    FM_RUNTIME_LOG="$dir/runtime.log" PATH="$dir/fakebin:$PATH" \
+    perl -e 'setpgrp(0, 0); exec @ARGV' "$ROOT/bin/fm-teardown.sh" "$mate_id" --force \
+    > "$dir/stdout" 2> "$dir/stderr"
+  rc=$?
+  pkill -P "$holder" >/dev/null 2>&1
+  kill "$holder" >/dev/null 2>&1
+  wait "$holder" 2>/dev/null
+  set -e
+
+  [ "$rc" -ne 0 ] \
+    || fail "forced retirement returned a descendant's pool slot while that home held its own allocation lock"
+  assert_contains "$(cat "$dir/stderr")" "another Treehouse slot allocation or return is in progress" \
+    "the refusal should name the contended slot lock, not some unrelated check"
+  assert_contains "$(cat "$dir/stderr")" "$child" \
+    "the refusal should name the descendant task whose slot lock was contended"
+  assert_present "$mate/state/$child.meta" "the contended forced retirement removed the descendant's record"
+  assert_present "$home/state/$mate_id.meta" "the contended forced retirement removed the secondmate's own record"
+  assert_present "$slot" "the contended forced retirement touched the descendant's pool slot"
+  ! grep -Fq 'treehouse <return>' "$dir/runtime.log" \
+    || fail "the contended forced retirement reached treehouse return: $(cat "$dir/runtime.log")"
+  pass "a forced retirement serializes on the descendant home's own Treehouse project lock"
+}
+
 test_primary_home_derives_no_pool_root
 test_secondmate_home_derives_a_root_under_its_own_home
 test_two_secondmate_homes_never_derive_the_same_root
@@ -359,6 +486,7 @@ test_marker_id_outside_the_portable_charset_is_refused
 test_dot_only_marker_id_cannot_collapse_to_the_default_root
 test_primary_home_lock_path_is_unchanged_by_private_pool_roots
 test_homes_with_disjoint_pool_roots_take_disjoint_project_locks
+test_forced_retirement_locks_the_descendants_own_project_lock
 test_primary_home_spawn_sends_the_unmodified_acquire_command
 test_secondmate_home_spawn_sends_its_own_root
 
