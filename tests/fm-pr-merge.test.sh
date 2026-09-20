@@ -101,15 +101,9 @@ status_context() {
 # stays CLEAN because that is what GitHub reports for exactly this case.
 # Args: case_dir head_sha <rollup-entry-json>...
 write_github_rollup_json() {
-  local case_dir=$1 head=$2 entry rollup=''
+  local case_dir=$1 head=$2
   shift 2
-  for entry in "$@"; do
-    rollup="${rollup:+$rollup,}$entry"
-  done
-  printf '%s\n' "$head" > "$case_dir/github-head"
-  cat > "$case_dir/github-view.json" <<JSON
-{"state":"OPEN","isDraft":false,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","headRefOid":"$head","baseRefName":"main","statusCheckRollup":[$rollup]}
-JSON
+  write_github_rollup_json_with_state "$case_dir" "$head" CLEAN "$@"
 }
 
 # The same rollup with a chosen mergeStateStatus, so a case can put GitHub's own
@@ -2303,8 +2297,6 @@ test_no_required_checks_keeps_every_check_judged() {
   expect_code 1 "$rc" "requires-nothing: an unprotected base branch must not merge with a red check"
   assert_grep "check 'build' is not green" "$case_dir/stderr" \
     "requires-nothing: the red check was not named"
-  assert_grep 'main requires no check, so every check was judged' "$case_dir/stderr" \
-    "requires-nothing: the run did not say why it judged every check"
   assert_no_grep 'pr merge' "$case_dir/gh.log" \
     "requires-nothing: gh pr merge ran on a base branch that requires nothing"
   pass "fm-pr-merge judges every check when the base branch requires none"
@@ -2512,12 +2504,19 @@ test_supersession_still_applies_under_narrowing() {
     "$(check_run gate COMPLETED CANCELLED 2024-01-01T00:00:00Z)" \
     "$(check_run gate COMPLETED SUCCESS 2024-01-01T01:00:00Z)" \
     "$(check_run advisory COMPLETED FAILURE 2024-01-01T00:00:00Z)"
-  write_github_required_json "$case_dir" "$head" false gate:true advisory:false
+  # The rollup carries both runs of the required check, so the forge flags the
+  # same required name twice - the base branch still requires one check, and the
+  # judged list must say so once.
+  write_github_required_json "$case_dir" "$head" false gate:true gate:true advisory:false
 
   run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/209 \
     > "$case_dir/stdout" 2> "$case_dir/stderr" \
     || fail "narrowed-supersession: a superseded required failure should not refuse"
   assert_logged_gh_merge "$case_dir" 209 example/repo --squash
+  assert_grep 'main requires these checks: gate' "$case_dir/stderr" \
+    "narrowed-supersession: the judged list did not name the required check"
+  assert_no_grep 'main requires these checks: gate, gate' "$case_dir/stderr" \
+    "narrowed-supersession: a required check with two runs was listed twice"
 
   case_dir=$(make_case github-narrowed-current-failure)
   mkdir -p "$case_dir/wt"

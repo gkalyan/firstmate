@@ -23,7 +23,9 @@
 # pull request the forge still reports BLOCKED is refused even when every check
 # this guard judged was green, unless an attended --allow-red waiver or
 # --attended-override already decided that state, which the run says out loud.
-# Every run says which checks it judged and which it ignored, on both outcomes.
+# A narrowed run names which checks it judged and which it ignored; a run whose
+# required read failed says so on its own outcome line, because it is judging
+# every check without knowing which ones gate.
 # Every failing condition is reported, not
 # just the first. The verified head is then passed to gh as
 # --match-head-commit, so a push that lands between that read and the merge
@@ -637,10 +639,13 @@ github_read_required_checks() {
                    else ($contexts.pageInfo.hasNextPage
                          | if type == "boolean" then tostring else error("no page info") end)
                    end),
-        (($contexts.nodes // [])[]
-          | if (.isRequired | type) != "boolean" then error("check does not report isRequired") else . end
-          | select(.isRequired)
-          | "required=" + ((if .__typename == "CheckRun" then .name else .context end) // ""))
+        (($contexts.nodes // [])
+          | map(if (.isRequired | type) != "boolean" then error("check does not report isRequired") else . end
+                | select(.isRequired)
+                | ((if .__typename == "CheckRun" then .name else .context end) // ""))
+          | reduce .[] as $name ([]; if index($name) then . else . + [$name] end)
+          | .[]
+          | "required=" + .)
     ' 2>/dev/null) || return 0
 
   while IFS= read -r line; do
@@ -690,7 +695,7 @@ NAMES
 # Pre-merge conditions for a GitHub pull request, read from one live view.
 # Sets FM_PR_MERGE_HEAD to the verified head on success.
 github_verify_mergeable() {
-  local json fields line red name covered ignored waived required_display
+  local json fields line red name covered ignored waived required_display degraded
   local total=0 named=0 refusals=''
   local state='' draft='' mergeable='' merge_state='' live_head='' base=''
 
@@ -792,34 +797,27 @@ FIELDS
 $red
 EOF
 
-  # Say what was judged on both outcomes. A guard that narrows silently is one
-  # nobody can audit, and the operator reading a refusal needs the same scope
-  # the success line reports.
-  case "$FM_PR_GITHUB_REQUIRED_STATUS" in
-    declared)
-      # Joined one name at a time, the way the refusal list is built, because a
-      # check name may itself contain a comma - the advisory jobs that motivated
-      # this read do - and rewriting every comma in the joined string would
-      # corrupt the names it is meant to report.
-      required_display=''
-      while IFS= read -r line; do
-        [ -n "$line" ] || continue
-        required_display="${required_display:+$required_display, }$line"
-      done <<NAMES
+  # Narrowing is the only path that says less than "every check", so it is the
+  # only one that needs its own line: a guard that narrows silently is one
+  # nobody can audit. Judging every check says nothing a run did not already
+  # say, and a read that failed rides the outcome line below rather than adding
+  # a line to every run.
+  if [ "$FM_PR_GITHUB_REQUIRED_STATUS" = declared ]; then
+    # Joined one name at a time, the way the refusal list is built, because a
+    # check name may itself contain a comma - the advisory jobs that motivated
+    # this read do - and rewriting every comma in the joined string would
+    # corrupt the names it is meant to report.
+    required_display=''
+    while IFS= read -r line; do
+      [ -n "$line" ] || continue
+      required_display="${required_display:+$required_display, }$line"
+    done <<NAMES
 $FM_PR_GITHUB_REQUIRED_NAMES
 NAMES
-      printf 'notice: %s requires these checks: %s\n' "$base" "$required_display" >&2
-      [ -z "$ignored" ] || printf 'notice: not judged, because %s does not require them: %s\n' \
-        "$base" "$ignored" >&2
-      ;;
-    none)
-      printf 'notice: %s requires no check, so every check was judged\n' "$base" >&2
-      ;;
-    *)
-      printf 'notice: could not read which checks %s requires, so every check was judged\n' \
-        "$base" >&2
-      ;;
-  esac
+    printf 'notice: %s requires these checks: %s\n' "$base" "$required_display" >&2
+    [ -z "$ignored" ] || printf 'notice: not judged, because %s does not require them: %s\n' \
+      "$base" "$ignored" >&2
+  fi
 
   # Narrowing is the one path here that deliberately ignores a red check, so it
   # carries its own cross-check. GitHub computes mergeStateStatus from the same
@@ -854,8 +852,15 @@ NAMES
     fi
   fi
 
+  # A read that failed leaves this guard running degraded - judging every check
+  # because it does not know which ones gate - so both outcome lines carry that,
+  # where an operator already reads them.
+  degraded=''
+  [ "$FM_PR_GITHUB_REQUIRED_STATUS" != unreadable ] \
+    || degraded=" (could not read which checks $base requires, so every check was judged)"
+
   if [ -n "$refusals" ]; then
-    printf 'error: refusing to merge %s\n' "$URL" >&2
+    printf 'error: refusing to merge %s%s\n' "$URL" "$degraded" >&2
     printf '%s' "$refusals" >&2
     [ -z "$uncovered" ] || printf 'error: these checks are not green: %s\n' "$uncovered" >&2
     return 1
@@ -864,8 +869,8 @@ NAMES
     printf 'verified: %s is open and mergeable, with every check %s requires green at head %s\n' \
       "$URL" "$base" "$live_head" >&2
   else
-    printf 'verified: %s is open and mergeable, with every check green at head %s\n' \
-      "$URL" "$live_head" >&2
+    printf 'verified: %s is open and mergeable, with every check green at head %s%s\n' \
+      "$URL" "$live_head" "$degraded" >&2
   fi
   FM_PR_MERGE_HEAD=$live_head
   FM_PR_GITHUB_BASE=$base

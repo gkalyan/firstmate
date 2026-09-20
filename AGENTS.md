@@ -351,7 +351,7 @@ The path's worker, automated gates, and captain approval remain authoritative:
 
 Delivery mode and `yolo` are orthogonal.
 `yolo` governs merge authority only: with it off, the captain approves every PR merge and every local-only landing; with it on, firstmate merges green, in-scope work itself.
-Red means the checks the base branch actually requires, which `fm-pr-merge.sh` reads from the forge, so a pull request whose only failures are checks that branch does not require is not red and needs no waiver.
+Where the forge declares a required set, which `fm-pr-merge.sh` reads from it, red means exactly the checks the base branch requires, so a pull request whose only failures are checks that branch does not require is not red and needs no waiver; a base branch that requires nothing and a read that failed both leave every check judged, where any failure is still red and still needs the captain's waiver below.
 Never merge a red PR under either setting unless a current explicit captain instruction names the single GitHub check waived through `fm-pr-merge.sh --allow-red`; that attended-only waiver still requires every other check green.
 Destructive, irreversible, and security-sensitive merges still escalate.
 Without a current explicit captain instruction that states the concrete merge, the green default stands, and standing `yolo` cannot authorize a red merge; section 1 owns when such an instruction overrides a Firstmate-written standing rule within its exact scope.
