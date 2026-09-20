@@ -112,6 +112,21 @@ write_github_rollup_json() {
 JSON
 }
 
+# The same rollup with a chosen mergeStateStatus, so a case can put GitHub's own
+# verdict about the base branch's requirements beside the checks it reports.
+# Args: case_dir head_sha merge_state <rollup-entry-json>...
+write_github_rollup_json_with_state() {
+  local case_dir=$1 head=$2 merge_state=$3 entry rollup=''
+  shift 3
+  for entry in "$@"; do
+    rollup="${rollup:+$rollup,}$entry"
+  done
+  printf '%s\n' "$head" > "$case_dir/github-head"
+  cat > "$case_dir/github-view.json" <<JSON
+{"state":"OPEN","isDraft":false,"mergeable":"MERGEABLE","mergeStateStatus":"$merge_state","headRefOid":"$head","baseRefName":"main","statusCheckRollup":[$rollup]}
+JSON
+}
+
 assert_logged_gh_merge() {
   local case_dir=$1 number=$2 repo=$3 head line extra=
   shift 3
@@ -182,6 +197,31 @@ case "${1:-} ${2:-}" in
     exit "$merge_rc"
     ;;
   "api graphql")
+    # The required-check read and the post-merge outcome read are both GraphQL,
+    # so they are told apart by the query itself. The required payload is fed
+    # through the real jq with the script's own --jq program, so the filter that
+    # decides what is required is exercised rather than stubbed past.
+    case " $* " in
+      *isRequired*)
+        if [ -f "${FM_TEST_GH_REQUIRED_FAIL:-}" ]; then
+          echo 'error: could not reach the GitHub API' >&2
+          exit 1
+        fi
+        [ -f "${FM_TEST_GH_REQUIRED_JSON:-}" ] || exit 1
+        jq_program=''
+        want_program=0
+        for arg in "$@"; do
+          if [ "$want_program" -eq 1 ]; then
+            jq_program=$arg
+            want_program=0
+            continue
+          fi
+          [ "$arg" = --jq ] && want_program=1
+        done
+        jq -r "$jq_program" < "$FM_TEST_GH_REQUIRED_JSON" || exit 1
+        exit 0
+        ;;
+    esac
     if [ -f "${FM_TEST_GH_GRAPHQL_FAIL:-}" ]; then
       echo 'error: could not reach the GitHub API' >&2
       exit 1
@@ -384,6 +424,8 @@ run_pr_merge() {
   FM_TEST_GH_MERGE_RC_FILE="$case_dir/github-merge-rc" \
   FM_TEST_GH_MERGE_OUTPUT="$(cat "$case_dir/github-merge-output" 2>/dev/null || true)" \
   FM_TEST_GH_GRAPHQL_FAIL="$case_dir/github-graphql-fail" \
+  FM_TEST_GH_REQUIRED_JSON="$case_dir/github-required.json" \
+  FM_TEST_GH_REQUIRED_FAIL="$case_dir/github-required-fail" \
   FM_TEST_GH_RULES_FAIL="$case_dir/github-rules-fail" \
   FM_TEST_GH_RULES_FAIL_BODY="$case_dir/github-rules-fail-body" \
   FM_TEST_META_AT_MERGE="$case_dir/meta-at-merge" \
@@ -405,6 +447,33 @@ run_pr_merge() {
     return 1
   fi
   return "$rc"
+}
+
+# GitHub's own answer to "which checks does this pull request's base branch
+# require", in the shape the forge returns it: every rollup context carries the
+# isRequired flag GitHub computes from that branch's rules. A case that writes
+# no payload leaves the read failing, which is what an unreadable required set
+# looks like. Args: case_dir head_oid has_next_page <name>:<true|false>...
+write_github_required_json() {
+  local case_dir=$1 oid=$2 more=$3 spec name required nodes=''
+  shift 3
+  for spec in "$@"; do
+    name=${spec%:*}
+    required=${spec##*:}
+    nodes="${nodes:+$nodes,}{\"__typename\":\"CheckRun\",\"name\":\"$name\",\"isRequired\":$required}"
+  done
+  cat > "$case_dir/github-required.json" <<JSON
+{"data":{"repository":{"pullRequest":{"commits":{"nodes":[{"commit":{"oid":"$oid","statusCheckRollup":{"contexts":{"pageInfo":{"hasNextPage":$more},"nodes":[$nodes]}}}}]}}}}}
+JSON
+}
+
+# The same answer with a context the forge did not flag either way, which is an
+# answer this guard must not read a required set out of. Args: case_dir head_oid
+write_github_required_json_without_flag() {
+  local case_dir=$1 oid=$2
+  cat > "$case_dir/github-required.json" <<JSON
+{"data":{"repository":{"pullRequest":{"commits":{"nodes":[{"commit":{"oid":"$oid","statusCheckRollup":{"contexts":{"pageInfo":{"hasNextPage":false},"nodes":[{"__typename":"CheckRun","name":"gate"}]}}}}]}}}}}
+JSON
 }
 
 write_github_outcome() {
@@ -2147,6 +2216,320 @@ test_secondmate_without_parent_binding_is_loud() {
   pass "a secondmate home that cannot report upward says so instead of merging in silence"
 }
 
+# The defect that motivated the required-set read: a repository can run a
+# deliberately failing advisory tier beside the checks its base branch actually
+# requires. Judging every check made such a repository permanently unmergeable,
+# so what the forge itself declares required is what may refuse the merge.
+test_non_required_red_check_no_longer_refuses() {
+  local case_dir rc head
+  head=cccccccccccccccccccccccccccccccccccccccc
+  case_dir=$(make_case github-advisory-red)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  write_github_rollup_json_with_state "$case_dir" "$head" UNSTABLE \
+    "$(check_run type-check COMPLETED SUCCESS 2024-01-01T00:00:00Z)" \
+    "$(check_run quality-ratchet COMPLETED SUCCESS 2024-01-01T00:00:00Z)" \
+    "$(check_run 'advisory (non-blocking): build' COMPLETED FAILURE 2024-01-01T00:00:00Z)"
+  write_github_required_json "$case_dir" "$head" false \
+    type-check:true quality-ratchet:true 'advisory (non-blocking): build:false'
+
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/200 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "advisory-red: a check the base branch does not require must not refuse the merge"
+  assert_logged_gh_merge "$case_dir" 200 example/repo --squash
+  assert_grep 'main requires these checks: type-check, quality-ratchet' "$case_dir/stderr" \
+    "advisory-red: the run did not say which checks it judged"
+  assert_grep 'not judged, because main does not require them: advisory (non-blocking): build' \
+    "$case_dir/stderr" "advisory-red: the run did not say which check it ignored"
+  assert_grep 'with every check main requires green at head' "$case_dir/stderr" \
+    "advisory-red: the verified line overstated what it checked"
+  pass "fm-pr-merge merges when only checks the base branch does not require are red"
+}
+
+# Narrowing must not reach the checks that do gate: a required check that is red
+# still refuses, and the refusal names it rather than the advisory one beside it.
+test_required_red_check_still_refuses() {
+  local case_dir rc head
+  head=dddddddddddddddddddddddddddddddddddddddd
+  case_dir=$(make_case github-required-red)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  write_github_rollup_json_with_state "$case_dir" "$head" BLOCKED \
+    "$(check_run type-check COMPLETED FAILURE 2024-01-01T00:00:00Z)" \
+    "$(check_run 'advisory (non-blocking): build' COMPLETED FAILURE 2024-01-01T00:00:00Z)"
+  write_github_required_json "$case_dir" "$head" false \
+    type-check:true 'advisory (non-blocking): build:false'
+
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/201 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "required-red: a red required check must still refuse"
+  assert_grep "check 'type-check' is not green" "$case_dir/stderr" \
+    "required-red: the red required check was not named"
+  assert_no_grep "check 'advisory (non-blocking): build' is not green" "$case_dir/stderr" \
+    "required-red: a check the base branch does not require was still refused"
+  assert_no_grep 'pr merge' "$case_dir/gh.log" \
+    "required-red: gh pr merge ran with a required check red"
+  pass "fm-pr-merge still refuses a red check the base branch requires"
+}
+
+# The hole the required-set read could have opened. A base branch that requires
+# nothing declares no gate anywhere, so there is no set to narrow to; judging an
+# empty required set would merge a pull request with every check red, which is
+# weaker than the rule this guard already had. The older all-green rule stands.
+test_no_required_checks_keeps_every_check_judged() {
+  local case_dir rc head
+  head=eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+  case_dir=$(make_case github-requires-nothing)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  write_github_rollup_json_with_state "$case_dir" "$head" UNSTABLE \
+    "$(check_run build COMPLETED FAILURE 2024-01-01T00:00:00Z)"
+  write_github_required_json "$case_dir" "$head" false build:false
+
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/202 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "requires-nothing: an unprotected base branch must not merge with a red check"
+  assert_grep "check 'build' is not green" "$case_dir/stderr" \
+    "requires-nothing: the red check was not named"
+  assert_grep 'main requires no check, so every check was judged' "$case_dir/stderr" \
+    "requires-nothing: the run did not say why it judged every check"
+  assert_no_grep 'pr merge' "$case_dir/gh.log" \
+    "requires-nothing: gh pr merge ran on a base branch that requires nothing"
+  pass "fm-pr-merge judges every check when the base branch requires none"
+}
+
+# A read that failed says nothing about what is required, so it must leave the
+# judged set exactly as wide as it was - the discipline github_checks_not_green
+# already keeps for the rollup, where a malformed answer is a failed read and
+# never an empty red set.
+test_unreadable_required_set_keeps_every_check_judged() {
+  local case_dir rc head
+  head=ffffffffffffffffffffffffffffffffffffffff
+  case_dir=$(make_case github-required-unreadable)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  write_github_rollup_json_with_state "$case_dir" "$head" UNSTABLE \
+    "$(check_run build COMPLETED FAILURE 2024-01-01T00:00:00Z)"
+  : > "$case_dir/github-required-fail"
+
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/203 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "required-unreadable: a failed required read must not narrow what is judged"
+  assert_grep "check 'build' is not green" "$case_dir/stderr" \
+    "required-unreadable: the red check was not named"
+  assert_grep 'could not read which checks main requires, so every check was judged' \
+    "$case_dir/stderr" "required-unreadable: the run hid that the read failed"
+  assert_no_grep 'pr merge' "$case_dir/gh.log" \
+    "required-unreadable: gh pr merge ran on an unreadable required set"
+  pass "fm-pr-merge judges every check when the required set cannot be read"
+}
+
+# The required set is only true of the commit it was read at. An answer that
+# describes another head describes another pull request state, so it cannot be
+# allowed to decide what gates this one.
+test_required_set_read_at_another_head_is_unreadable() {
+  local case_dir rc head
+  head=1111111111111111111111111111111111111111
+  case_dir=$(make_case github-required-other-head)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  write_github_rollup_json_with_state "$case_dir" "$head" UNSTABLE \
+    "$(check_run build COMPLETED FAILURE 2024-01-01T00:00:00Z)"
+  write_github_required_json "$case_dir" \
+    2222222222222222222222222222222222222222 false gate:true
+
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/204 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "required-other-head: a required set read at another head must not narrow"
+  assert_grep 'could not read which checks main requires' "$case_dir/stderr" \
+    "required-other-head: a stale-head answer was treated as readable"
+  pass "fm-pr-merge refuses a required set read at a different head"
+}
+
+# A truncated context page can omit a required check, and narrowing to a short
+# answer would drop exactly the check that gates. A short answer is unreadable.
+test_truncated_required_page_is_unreadable() {
+  local case_dir rc head
+  head=3333333333333333333333333333333333333333
+  case_dir=$(make_case github-required-truncated)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  write_github_rollup_json_with_state "$case_dir" "$head" UNSTABLE \
+    "$(check_run build COMPLETED FAILURE 2024-01-01T00:00:00Z)"
+  write_github_required_json "$case_dir" "$head" true gate:true
+
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/205 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "required-truncated: a truncated required set must not narrow"
+  assert_grep 'could not read which checks main requires' "$case_dir/stderr" \
+    "required-truncated: a partial answer was treated as complete"
+  assert_no_grep 'pr merge' "$case_dir/gh.log" \
+    "required-truncated: gh pr merge ran on a partial required set"
+  pass "fm-pr-merge refuses a required set whose context page was truncated"
+}
+
+# Required-ness comes from the forge's own flag. A context the forge did not
+# flag is not evidence that it is optional, so the whole answer is unreadable
+# rather than quietly read as "not required".
+test_required_set_without_the_forge_flag_is_unreadable() {
+  local case_dir rc head
+  head=4444444444444444444444444444444444444444
+  case_dir=$(make_case github-required-unflagged)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  write_github_rollup_json_with_state "$case_dir" "$head" UNSTABLE \
+    "$(check_run build COMPLETED FAILURE 2024-01-01T00:00:00Z)"
+  write_github_required_json_without_flag "$case_dir" "$head"
+
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/206 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "required-unflagged: an unflagged context must not be read as optional"
+  assert_grep 'could not read which checks main requires' "$case_dir/stderr" \
+    "required-unflagged: a missing flag was treated as a readable answer"
+  pass "fm-pr-merge refuses a required set whose contexts carry no required flag"
+}
+
+# Narrowing is the one path that deliberately ignores a red check, so it is
+# cross-checked against GitHub's own verdict. The forge computes
+# mergeStateStatus from the same requirements: BLOCKED while every check this
+# guard judged is green means the two disagree about what gates the pull
+# request, and the disagreement refuses.
+test_blocked_merge_state_refuses_a_narrowed_merge() {
+  local case_dir rc head
+  head=5555555555555555555555555555555555555555
+  case_dir=$(make_case github-narrowed-blocked)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  write_github_rollup_json_with_state "$case_dir" "$head" BLOCKED \
+    "$(check_run gate COMPLETED SUCCESS 2024-01-01T00:00:00Z)" \
+    "$(check_run advisory COMPLETED FAILURE 2024-01-01T00:00:00Z)"
+  write_github_required_json "$case_dir" "$head" false gate:true advisory:false
+
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/207 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "narrowed-blocked: a BLOCKED pull request must not merge on a narrowed set"
+  assert_grep 'mergeStateStatus BLOCKED' "$case_dir/stderr" \
+    "narrowed-blocked: the refusal did not name the forge's own verdict"
+  assert_no_grep 'pr merge' "$case_dir/gh.log" \
+    "narrowed-blocked: gh pr merge ran while GitHub still reported the PR blocked"
+  pass "fm-pr-merge refuses a narrowed merge GitHub still reports as blocked"
+}
+
+# The attended waiver keeps working on the checks that do gate, which is the
+# only place it was ever needed.
+test_allow_red_still_waives_a_required_check() {
+  local case_dir head
+  head=6666666666666666666666666666666666666666
+  case_dir=$(make_case github-required-allow-red)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  write_github_rollup_json_with_state "$case_dir" "$head" UNSTABLE \
+    "$(check_run gate COMPLETED FAILURE 2024-01-01T00:00:00Z)"
+  write_github_required_json "$case_dir" "$head" false gate:true
+
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/208 \
+    --allow-red gate \
+    > "$case_dir/stdout" 2> "$case_dir/stderr" \
+    || fail "required-allow-red: a named waiver on a required check should merge"
+  assert_logged_gh_merge "$case_dir" 208 example/repo --squash
+  pass "fm-pr-merge still waives a named required check with --allow-red"
+}
+
+# Narrowing filters the red set the supersession rule already produced, so a
+# required check whose failed run was replaced by a passing re-run stays green
+# and a required check that is currently failing stays red.
+test_supersession_still_applies_under_narrowing() {
+  local case_dir rc head
+  head=7777777777777777777777777777777777777777
+  case_dir=$(make_case github-narrowed-supersession)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  write_github_rollup_json_with_state "$case_dir" "$head" UNSTABLE \
+    "$(check_run gate COMPLETED CANCELLED 2024-01-01T00:00:00Z)" \
+    "$(check_run gate COMPLETED SUCCESS 2024-01-01T01:00:00Z)" \
+    "$(check_run advisory COMPLETED FAILURE 2024-01-01T00:00:00Z)"
+  write_github_required_json "$case_dir" "$head" false gate:true advisory:false
+
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/209 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr" \
+    || fail "narrowed-supersession: a superseded required failure should not refuse"
+  assert_logged_gh_merge "$case_dir" 209 example/repo --squash
+
+  case_dir=$(make_case github-narrowed-current-failure)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  write_github_rollup_json_with_state "$case_dir" "$head" UNSTABLE \
+    "$(check_run gate COMPLETED SUCCESS 2024-01-01T00:00:00Z)" \
+    "$(check_run gate COMPLETED FAILURE 2024-01-01T01:00:00Z)"
+  write_github_required_json "$case_dir" "$head" false gate:true
+
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/210 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "narrowed-current-failure: a currently failing required check must refuse"
+  assert_grep "check 'gate' is not green" "$case_dir/stderr" \
+    "narrowed-current-failure: the current required failure was not named"
+  pass "fm-pr-merge keeps run supersession under a narrowed required set"
+}
+
+
+# Check names carry commas in practice - the advisory jobs that motivated this
+# read do - so the list of judged checks is joined without rewriting what is
+# inside a name.
+test_required_check_name_containing_a_comma_is_reported_intact() {
+  local case_dir head required
+  head=8888888888888888888888888888888888888888
+  required='lint, lint:types, test:process-flow'
+  case_dir=$(make_case github-required-comma)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  write_github_rollup_json_with_state "$case_dir" "$head" UNSTABLE \
+    "$(check_run "$required" COMPLETED SUCCESS 2024-01-01T00:00:00Z)"
+  write_github_required_json "$case_dir" "$head" false "$required:true"
+
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/211 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr" \
+    || fail "required-comma: a green required check should merge"
+  assert_grep "main requires these checks: $required" "$case_dir/stderr" \
+    "required-comma: a comma inside a check name was rewritten in the judged list"
+  pass "fm-pr-merge reports a required check name containing commas intact"
+}
+
+
 test_github_zero_exit_queue_required_refuses_with_exact_retry
 test_github_closed_unqueued_outcome_omits_retry_flags
 test_github_agreeing_queue_rules_keep_retry_guidance
@@ -3107,3 +3490,14 @@ test_away_record_cannot_change_between_the_authority_read_and_the_merge
 test_a_grant_revoked_before_the_merge_refuses_it
 test_merge_refuses_when_the_away_record_cannot_be_locked
 test_allow_red_refused_on_gitlab
+test_non_required_red_check_no_longer_refuses
+test_required_red_check_still_refuses
+test_no_required_checks_keeps_every_check_judged
+test_unreadable_required_set_keeps_every_check_judged
+test_required_set_read_at_another_head_is_unreadable
+test_truncated_required_page_is_unreadable
+test_required_set_without_the_forge_flag_is_unreadable
+test_blocked_merge_state_refuses_a_narrowed_merge
+test_allow_red_still_waives_a_required_check
+test_supersession_still_applies_under_narrowing
+test_required_check_name_containing_a_comma_is_reported_intact

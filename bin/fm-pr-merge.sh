@@ -13,6 +13,16 @@
 # is open, not a draft, mergeable, free of conflicts, and every unwaived check
 # is green at the exact current head commit, where github_checks_not_green below
 # owns what makes a check green and judges each one by its current run.
+# Which of those checks can refuse the merge is the base branch's own
+# declaration, read by github_read_required_checks below: when the forge names
+# a required set, exactly those checks are judged, so a repository can run an
+# advisory tier that fails on purpose without becoming unmergeable. When the
+# base branch requires nothing, or that read fails, every check is judged, which
+# is the older and stricter rule - a failed read never narrows what is judged.
+# Narrowing also cross-checks itself against GitHub's own mergeStateStatus, so a
+# pull request the forge still reports BLOCKED is refused even when every check
+# this guard judged was green.
+# Every run says which checks it judged and which it ignored, on both outcomes.
 # Every failing condition is reported, not
 # just the first. The verified head is then passed to gh as
 # --match-head-commit, so a push that lands between that read and the merge
@@ -564,10 +574,122 @@ github_checks_not_green() {
   ' 2>/dev/null || return 1
 }
 
+# Which checks the base branch actually requires of this pull request, one name
+# per line, as the forge itself reports them. GitHub answers this per check
+# through the rollup's isRequired, which resolves classic branch protection and
+# rulesets together and needs only ordinary repository read access, unlike the
+# branch-protection and rules endpoints, which a repository's plan can refuse
+# outright. The name is the join key back to the rollup because a required
+# status check IS declared by context name on GitHub; nothing here infers that
+# a check gates from what it is called, which would make a gate out of a naming
+# convention and let a job named "advisory" opt itself out of being judged.
+#
+# Sets FM_PR_GITHUB_REQUIRED_STATUS to one of three outcomes the caller must
+# keep apart:
+#   declared   - the forge named at least one required check; judge exactly those
+#   none       - the forge answered and the base branch requires nothing
+#   unreadable - the read failed, so what is required is unknown
+# Only "declared" may narrow what is judged. Both other outcomes leave every
+# check judged, which is this guard's existing rule, so a failed read can never
+# shrink the judged set the way an empty required set would - the same
+# discipline github_checks_not_green keeps when the rollup cannot be read.
+#
+# The answer is bound to $1, the head this merge already verified: a rollup read
+# at a different commit describes a different pull request state, and a
+# truncated context page could hide a required check and narrow the judged set
+# too far, so both are unreadable rather than a short answer.
+#
+# This issues its own GraphQL document instead of reusing the statusCheckRollup
+# that github_verify_mergeable has already fetched, and has to keep doing so.
+# isRequired takes a pullRequestNumber argument, and gh's canned
+# `--json statusCheckRollup` query omits it, so every check comes back null
+# there. Reusing that payload would look like an obvious saved API call; it
+# would instead make this read fail everywhere and quietly return the guard to
+# judging every check, with nothing failing to show it. Confirmed 2026-09-20
+# against cli/cli#14475, where the canned query reports null for all eleven
+# checks while this one reports three required and eight not.
+FM_PR_GITHUB_REQUIRED_STATUS=unreadable
+FM_PR_GITHUB_REQUIRED_NAMES=
+github_read_required_checks() {
+  local verified_head=$1 fields line name
+  local oid='' more='' names='' oid_seen=0 more_seen=0
+
+  FM_PR_GITHUB_REQUIRED_STATUS=unreadable
+  FM_PR_GITHUB_REQUIRED_NAMES=
+
+  command -v gh >/dev/null 2>&1 || return 0
+  fm_pr_head_valid "$verified_head" || return 0
+
+  # shellcheck disable=SC2016  # GraphQL variables are literal query syntax.
+  fields=$(gh api graphql \
+    -f query='query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$number){commits(last:1){nodes{commit{oid statusCheckRollup{contexts(first:100){pageInfo{hasNextPage} nodes{__typename ... on CheckRun{name isRequired(pullRequestNumber:$number)} ... on StatusContext{context isRequired(pullRequestNumber:$number)}}}}}}}}}}' \
+    -F "owner=$PR_OWNER" -F "repo=$PR_REPO" -F "number=$PR_NUMBER" \
+    --jq '
+      (.data.repository.pullRequest.commits.nodes // []) as $nodes
+      | if ($nodes | length) != 1 then error("no head commit") else . end
+      | $nodes[0].commit as $commit
+      | ($commit.oid // "") as $oid
+      | if ($oid | type) != "string" or $oid == "" then error("no head oid") else . end
+      | ($commit.statusCheckRollup.contexts) as $contexts
+      | "oid=" + $oid,
+        "more=" + (if $contexts == null then "false"
+                   else ($contexts.pageInfo.hasNextPage
+                         | if type == "boolean" then tostring else error("no page info") end)
+                   end),
+        (($contexts.nodes // [])[]
+          | if (.isRequired | type) != "boolean" then error("check does not report isRequired") else . end
+          | select(.isRequired)
+          | "required=" + ((if .__typename == "CheckRun" then .name else .context end) // ""))
+    ' 2>/dev/null) || return 0
+
+  while IFS= read -r line; do
+    case "$line" in
+      oid=*) oid=${line#oid=}; oid_seen=$((oid_seen + 1)) ;;
+      more=*) more=${line#more=}; more_seen=$((more_seen + 1)) ;;
+      required=*)
+        name=${line#required=}
+        # A check the forge could not name cannot be a declared gate, and
+        # keeping it would only match the rollup's "(unnamed check)" placeholder
+        # by coincidence.
+        [ -n "$name" ] || continue
+        names="${names:+$names
+}$name"
+        ;;
+      '') continue ;;
+      *) return 0 ;;
+    esac
+  done <<FIELDS
+$fields
+FIELDS
+
+  [ "$oid_seen" -eq 1 ] && [ "$more_seen" -eq 1 ] || return 0
+  [ "$more" = false ] || return 0
+  [ "$oid" = "$verified_head" ] || return 0
+
+  FM_PR_GITHUB_REQUIRED_NAMES=$names
+  if [ -n "$names" ]; then
+    FM_PR_GITHUB_REQUIRED_STATUS=declared
+  else
+    FM_PR_GITHUB_REQUIRED_STATUS=none
+  fi
+}
+
+# Whether the base branch requires the named check, used only when the forge
+# declared a required set.
+github_check_is_required() {
+  local wanted=$1 line
+  while IFS= read -r line; do
+    [ "$line" = "$wanted" ] && return 0
+  done <<NAMES
+$FM_PR_GITHUB_REQUIRED_NAMES
+NAMES
+  return 1
+}
+
 # Pre-merge conditions for a GitHub pull request, read from one live view.
 # Sets FM_PR_MERGE_HEAD to the verified head on success.
 github_verify_mergeable() {
-  local json fields line red name covered
+  local json fields line red name covered ignored required_display
   local total=0 named=0 refusals=''
   local state='' draft='' mergeable='' merge_state='' live_head='' base=''
 
@@ -636,9 +758,21 @@ FIELDS
     || refusals="$refusals  - mergeStateStatus is DIRTY (conflicts)
 "
 
+  # What the base branch requires decides which of the non-green checks can
+  # refuse this merge. Only a required set the forge actually declared narrows
+  # that; a branch that requires nothing and a read that failed both leave every
+  # check judged, so neither can turn a red pull request green.
+  github_read_required_checks "$live_head"
+
   uncovered=''
+  ignored=''
   while IFS= read -r name; do
     [ -n "$name" ] || continue
+    if [ "$FM_PR_GITHUB_REQUIRED_STATUS" = declared ] \
+      && ! github_check_is_required "$name"; then
+      ignored="${ignored:+$ignored, }$name"
+      continue
+    fi
     covered=0
     if [ "${#ALLOW_RED[@]}" -gt 0 ]; then
       for check in "${ALLOW_RED[@]}"; do
@@ -654,14 +788,64 @@ FIELDS
 $red
 EOF
 
+  # Say what was judged on both outcomes. A guard that narrows silently is one
+  # nobody can audit, and the operator reading a refusal needs the same scope
+  # the success line reports.
+  case "$FM_PR_GITHUB_REQUIRED_STATUS" in
+    declared)
+      # Joined one name at a time, the way the refusal list is built, because a
+      # check name may itself contain a comma - the advisory jobs that motivated
+      # this read do - and rewriting every comma in the joined string would
+      # corrupt the names it is meant to report.
+      required_display=''
+      while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        required_display="${required_display:+$required_display, }$line"
+      done <<NAMES
+$FM_PR_GITHUB_REQUIRED_NAMES
+NAMES
+      printf 'notice: %s requires these checks: %s\n' "$base" "$required_display" >&2
+      [ -z "$ignored" ] || printf 'notice: not judged, because %s does not require them: %s\n' \
+        "$base" "$ignored" >&2
+      ;;
+    none)
+      printf 'notice: %s requires no check, so every check was judged\n' "$base" >&2
+      ;;
+    *)
+      printf 'notice: could not read which checks %s requires, so every check was judged\n' \
+        "$base" >&2
+      ;;
+  esac
+
+  # Narrowing is the one path here that deliberately ignores a red check, so it
+  # carries its own cross-check. GitHub computes mergeStateStatus from the same
+  # required checks, server-side: BLOCKED means something the base branch
+  # requires is unsatisfied, and UNSTABLE means only checks it does not require
+  # are failing. If this narrowed to nothing while the forge still calls the
+  # pull request BLOCKED, the two disagree about what gates it, and the
+  # disagreement refuses rather than resolving in favour of merging. This costs
+  # no extra read - mergeStateStatus is already in the live view above - and it
+  # is applied only when narrowing, so a base branch that requires nothing keeps
+  # exactly the behaviour it has today, where BLOCKED never refused on its own.
+  if [ "$FM_PR_GITHUB_REQUIRED_STATUS" = declared ] \
+    && [ -z "$refusals" ] && [ "$merge_state" = BLOCKED ]; then
+    refusals="$refusals  - every check $base requires is green, but GitHub still reports mergeStateStatus BLOCKED, so something it requires is unsatisfied
+"
+  fi
+
   if [ -n "$refusals" ]; then
     printf 'error: refusing to merge %s\n' "$URL" >&2
     printf '%s' "$refusals" >&2
     [ -z "$uncovered" ] || printf 'error: these checks are not green: %s\n' "$uncovered" >&2
     return 1
   fi
-  printf 'verified: %s is open and mergeable, with every required check green at head %s\n' \
-    "$URL" "$live_head" >&2
+  if [ "$FM_PR_GITHUB_REQUIRED_STATUS" = declared ]; then
+    printf 'verified: %s is open and mergeable, with every check %s requires green at head %s\n' \
+      "$URL" "$base" "$live_head" >&2
+  else
+    printf 'verified: %s is open and mergeable, with every check green at head %s\n' \
+      "$URL" "$live_head" >&2
+  fi
   FM_PR_MERGE_HEAD=$live_head
   FM_PR_GITHUB_BASE=$base
 }
