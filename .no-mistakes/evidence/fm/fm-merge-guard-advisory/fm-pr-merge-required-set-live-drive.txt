@@ -1,0 +1,154 @@
+Live drive of bin/fm-pr-merge.sh (worktree HEAD ac0dbcf) against a stand-in gh CLI
+serving GitHub's own answers: one live pull request view, the isRequired rollup
+read (run through the real jq with the script's own filter), the merge call, and
+the post-merge state read. Watcher-supervision banner lines removed.
+
+========== S1 the reported incident: ue-frontend pull request 2 ==========
+$ fm-pr-merge.sh task-x1 https://github.com/gkalyan/ue-frontend/pull/2
+notice: main requires these checks: type-check, lint:blueprint, quality-ratchet
+notice: not judged, because main does not require them: advisory (non-blocking): build, advisory (non-blocking): lint, lint:types, lint:status-labels, test:process-flow
+verified: https://github.com/gkalyan/ue-frontend/pull/2 is open and mergeable, with every check main requires green at head aaaa111122223333444455556666777788889999
+verified: https://github.com/gkalyan/ue-frontend/pull/2 is merged (state=MERGED, merged=true, isInMergeQueue=false)
+exit=0
+--- gh calls ---
+gh pr merge 2 --repo gkalyan/ue-frontend --match-head-commit aaaa111122223333444455556666777788889999 --squash
+
+BEFORE (base commit cfcd011), same pull request state:
+$ fm-pr-merge.sh task-x1 https://github.com/gkalyan/ue-frontend/pull/2
+error: refusing to merge https://github.com/gkalyan/ue-frontend/pull/2
+  - check 'advisory (non-blocking): build' is not green
+  - check 'advisory (non-blocking): lint, lint:types, lint:status-labels, test:process-flow' is not green
+error: these checks are not green: advisory (non-blocking): build, advisory (non-blocking): lint, lint:types, lint:status-labels, test:process-flow
+exit=1
+gh merge call: (none - no merge was attempted)
+
+========== S2 a red check the base branch DOES require still refuses ==========
+$ fm-pr-merge.sh task-x1 https://github.com/gkalyan/ue-frontend/pull/3
+notice: main requires these checks: type-check
+notice: not judged, because main does not require them: advisory (non-blocking): build
+error: refusing to merge https://github.com/gkalyan/ue-frontend/pull/3
+  - check 'type-check' is not green
+error: these checks are not green: type-check
+exit=1
+gh merge call: (none - no merge was attempted)
+
+========== S3 base branch requires nothing: strict all-green still stands ==========
+$ fm-pr-merge.sh task-x1 https://github.com/gkalyan/ue-frontend/pull/4
+error: refusing to merge https://github.com/gkalyan/ue-frontend/pull/4
+  - check 'build' is not green
+error: these checks are not green: build
+exit=1
+gh merge call: (none - no merge was attempted)
+
+========== S4a required read fails on a red PR: every check judged, run says it is degraded ==========
+$ fm-pr-merge.sh task-x1 https://github.com/gkalyan/ue-frontend/pull/5
+error: refusing to merge https://github.com/gkalyan/ue-frontend/pull/5 (could not read which checks main requires, so every check was judged)
+  - check 'build' is not green
+error: these checks are not green: build
+exit=1
+gh merge call: (none - no merge was attempted)
+
+========== S4b required read fails on a green PR: merge proceeds, verified line carries the degradation ==========
+$ fm-pr-merge.sh task-x1 https://github.com/gkalyan/ue-frontend/pull/6
+verified: https://github.com/gkalyan/ue-frontend/pull/6 is open and mergeable, with every check green at head aaaa111122223333444455556666777788889999 (could not read which checks main requires, so every check was judged)
+verified: https://github.com/gkalyan/ue-frontend/pull/6 is merged (state=MERGED, merged=true, isInMergeQueue=false)
+exit=0
+gh merge call: gh pr merge 6 --repo gkalyan/ue-frontend --match-head-commit aaaa111122223333444455556666777788889999 --squash
+
+========== S5 narrowed to green but GitHub still says BLOCKED: refuse ==========
+$ fm-pr-merge.sh task-x1 https://github.com/gkalyan/ue-frontend/pull/7
+notice: main requires these checks: gate
+notice: not judged, because main does not require them: advisory
+error: refusing to merge https://github.com/gkalyan/ue-frontend/pull/7
+  - every check main requires is green, but GitHub still reports mergeStateStatus BLOCKED, so something it requires is unsatisfied
+exit=1
+gh merge call: (none - no merge was attempted)
+
+========== S6 attended --allow-red waiver on a red REQUIRED check in that same BLOCKED state ==========
+$ fm-pr-merge.sh task-x1 https://github.com/gkalyan/ue-frontend/pull/8 --allow-red gate
+notice: main requires these checks: gate
+notice: GitHub reports mergeStateStatus BLOCKED, and the attended --allow-red waiver covers a check main requires: gate
+verified: https://github.com/gkalyan/ue-frontend/pull/8 is open and mergeable, with every check main requires green at head aaaa111122223333444455556666777788889999
+verified: https://github.com/gkalyan/ue-frontend/pull/8 is merged (state=MERGED, merged=true, isInMergeQueue=false)
+exit=0
+gh merge call: gh pr merge 8 --repo gkalyan/ue-frontend --match-head-commit aaaa111122223333444455556666777788889999 --squash
+
+========== S7 attended --attended-override --admin on a BLOCKED pull request ==========
+$ fm-pr-merge.sh task-x1 https://github.com/gkalyan/ue-frontend/pull/9 --attended-override -- --squash --admin
+notice: main requires these checks: gate
+notice: not judged, because main does not require them: advisory
+notice: GitHub reports mergeStateStatus BLOCKED, and --attended-override is in effect, so the merge proceeds under that attended authority
+verified: https://github.com/gkalyan/ue-frontend/pull/9 is open and mergeable, with every check main requires green at head aaaa111122223333444455556666777788889999
+verified: https://github.com/gkalyan/ue-frontend/pull/9 is merged (state=MERGED, merged=true, isInMergeQueue=false)
+exit=0
+gh merge call: gh pr merge 9 --repo gkalyan/ue-frontend --match-head-commit aaaa111122223333444455556666777788889999 --squash --admin
+
+========== S8 a job NAMED advisory that the base branch does require is still judged ==========
+$ fm-pr-merge.sh task-x1 https://github.com/gkalyan/ue-frontend/pull/10
+notice: main requires these checks: advisory (non-blocking): build, type-check
+error: refusing to merge https://github.com/gkalyan/ue-frontend/pull/10
+  - check 'advisory (non-blocking): build' is not green
+error: these checks are not green: advisory (non-blocking): build
+exit=1
+gh merge call: (none - no merge was attempted)
+
+========== S9a required set read at a DIFFERENT head is unreadable, not a narrowing ==========
+$ fm-pr-merge.sh task-x1 https://github.com/gkalyan/ue-frontend/pull/11
+error: refusing to merge https://github.com/gkalyan/ue-frontend/pull/11 (could not read which checks main requires, so every check was judged)
+  - check 'advisory (non-blocking): build' is not green
+error: these checks are not green: advisory (non-blocking): build
+exit=1
+gh merge call: (none - no merge was attempted)
+
+========== S9b a truncated context page is unreadable, not a narrowing ==========
+$ fm-pr-merge.sh task-x1 https://github.com/gkalyan/ue-frontend/pull/12
+error: refusing to merge https://github.com/gkalyan/ue-frontend/pull/12 (could not read which checks main requires, so every check was judged)
+  - check 'advisory (non-blocking): build' is not green
+error: these checks are not green: advisory (non-blocking): build
+exit=1
+gh merge call: (none - no merge was attempted)
+
+========== S9c a rollup context the forge did not flag isRequired is unreadable ==========
+$ fm-pr-merge.sh task-x1 https://github.com/gkalyan/ue-frontend/pull/13
+error: refusing to merge https://github.com/gkalyan/ue-frontend/pull/13 (could not read which checks main requires, so every check was judged)
+  - check 'advisory (non-blocking): build' is not green
+error: these checks are not green: advisory (non-blocking): build
+exit=1
+gh merge call: (none - no merge was attempted)
+
+========== S10 a required check with two runs at one head is listed once ==========
+$ fm-pr-merge.sh task-x1 https://github.com/gkalyan/ue-frontend/pull/14
+notice: main requires these checks: gate
+notice: not judged, because main does not require them: advisory
+verified: https://github.com/gkalyan/ue-frontend/pull/14 is open and mergeable, with every check main requires green at head aaaa111122223333444455556666777788889999
+verified: https://github.com/gkalyan/ue-frontend/pull/14 is merged (state=MERGED, merged=true, isInMergeQueue=false)
+exit=0
+gh merge call: gh pr merge 14 --repo gkalyan/ue-frontend --match-head-commit aaaa111122223333444455556666777788889999 --squash
+
+========== S11 a required check that never reported at all: rollup shows only the green advisory tier, GitHub says BLOCKED ==========
+$ fm-pr-merge.sh task-x1 https://github.com/gkalyan/ue-frontend/pull/15
+notice: main requires these checks: type-check
+error: refusing to merge https://github.com/gkalyan/ue-frontend/pull/15
+  - every check main requires is green, but GitHub still reports mergeStateStatus BLOCKED, so something it requires is unsatisfied
+exit=1
+gh merge call: (none - no merge was attempted)
+
+========== S12 a required check still in flight is not green, so the narrowed set still refuses ==========
+$ fm-pr-merge.sh task-x1 https://github.com/gkalyan/ue-frontend/pull/16
+notice: main requires these checks: type-check
+notice: not judged, because main does not require them: advisory
+error: refusing to merge https://github.com/gkalyan/ue-frontend/pull/16
+  - check 'type-check' is not green
+error: these checks are not green: type-check
+exit=1
+gh merge call: (none - no merge was attempted)
+
+========== S13 --allow-red naming a check the base branch does NOT require, with a red required check beside it ==========
+$ fm-pr-merge.sh task-x1 https://github.com/gkalyan/ue-frontend/pull/17 --allow-red advisory
+notice: main requires these checks: type-check
+notice: not judged, because main does not require them: advisory
+error: refusing to merge https://github.com/gkalyan/ue-frontend/pull/17
+  - check 'type-check' is not green
+error: these checks are not green: type-check
+exit=1
+gh merge call: (none - no merge was attempted)
