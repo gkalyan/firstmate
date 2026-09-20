@@ -1,0 +1,8 @@
+$ bin/fm-install-treehouse.sh /tmp/fm-pinbin.besxuT
+fm-install-treehouse.sh: downloading treehouse-v2.3.0-darwin-arm64.tar.gz from https://github.com/kunchenguid/treehouse/releases/download/v2.3.0/treehouse-v2.3.0-darwin-arm64.tar.gz
+fm-install-treehouse.sh: installed treehouse v2.3.0 to /tmp/fm-pinbin.besxuT/treehouse
+v2.3.0
+exit=0
+
+$ /tmp/fm-pinbin.besxuT/treehouse --version
+v2.3.0

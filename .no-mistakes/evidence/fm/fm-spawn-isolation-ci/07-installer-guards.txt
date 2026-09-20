@@ -1,0 +1,20 @@
+== Guard A: a tampered/incorrect pinned checksum must refuse to install ==
+fm-install-treehouse.sh: downloading treehouse-v2.3.0-darwin-arm64.tar.gz from https://github.com/kunchenguid/treehouse/releases/download/v2.3.0/treehouse-v2.3.0-darwin-arm64.tar.gz
+fm-install-treehouse.sh: checksum mismatch for treehouse-v2.3.0-darwin-arm64.tar.gz (expected deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef, got 1cb09bcfa830b4eec5e54beeaa71589adb9c5d828573dda0f5150e2d80cf13d5)
+exit=1
+installed binary present? no
+
+== Guard B: a pin whose downloaded binary reports another version must refuse ==
+(pin the 2.3.0 URL+sha but claim the version is 2.2.0)
+fm-install-treehouse.sh: downloading treehouse-vv2.3.0-darwin-arm64.tar.gz from https://github.com/kunchenguid/treehouse/releases/download/v2.3.0/treehouse-vv2.3.0-darwin-arm64.tar.gz
+curl: (56) The requested URL returned error: 404
+fm-install-treehouse.sh: download failed for https://github.com/kunchenguid/treehouse/releases/download/v2.3.0/treehouse-vv2.3.0-darwin-arm64.tar.gz (bounded at 15000000 bytes)
+exit=1
+
+== Guard C: unsupported platform is named, not guessed ==
+fm-install-treehouse.sh: unsupported platform Plan9-sparc; official Treehouse assets are linux/darwin amd64 and arm64
+== Guard B (redo): pin claims v2.2.0 but the fetched, checksum-valid binary is v2.3.0 ==
+fm-install-treehouse.sh: downloading treehouse-v2.3.0-darwin-arm64.tar.gz from https://github.com/kunchenguid/treehouse/releases/download/v2.3.0/treehouse-v2.3.0-darwin-arm64.tar.gz
+fm-install-treehouse.sh: installed treehouse version is 'v2.3.0', expected exact pin v2.2.0
+exit=1
+installed binary present? YES (path exists: v2.3.0)

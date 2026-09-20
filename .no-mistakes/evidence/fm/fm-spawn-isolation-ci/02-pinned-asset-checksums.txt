@@ -1,0 +1,8 @@
+Verifying every pinned asset in fm-install-treehouse.sh against the real GitHub release (v2.3.0)
+linux-amd64  OK   94fd2b2c20c35aac1ddc2941317890ad82c9916f5ccecbac4a50cda783eed10f
+linux-arm64  OK   408589ba72b58d5e942071ed863a83fd96566cfd1e514945daa59defde528bbb
+darwin-arm64  OK   1cb09bcfa830b4eec5e54beeaa71589adb9c5d828573dda0f5150e2d80cf13d5
+darwin-amd64  OK   349afcc13c2beb20d846eb560a11b30e1a5cab8e2dfb22988a36aa7f213b5881
+
+Linux amd64 binary (the asset the CI lane installs) reports:
+ELF: ELF 64-bit LSB executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=4ec66c405552437b4fc46670e7952759175e34fb, with debug_info, not stripped

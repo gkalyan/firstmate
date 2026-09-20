@@ -1,0 +1,25 @@
+== scratch project: /tmp/fm-th-lab.5gfhKE/proj   private pool root: /tmp/fm-th-lab.5gfhKE/.treehouse-homes/sm-abc123
+
+--- OLD pin v2.0.1 (what CI installed before this change) ---
+v2.0.1
+$ treehouse get --root $ROOT
+unknown flag: --root
+exit=1
+$ treehouse get --lease --root $ROOT
+unknown flag: --root
+exit=1
+
+--- NEW pin v2.3.0 (this change) ---
+v2.3.0
+$ treehouse get --lease --no-fetch --root $ROOT   -> already acquired above:
+/tmp/fm-th-lab.5gfhKE/.treehouse-homes/sm-abc123/.treehouse/proj-1b7ca5/1/proj
+
+pool root tree (private to this home):
+/tmp/fm-th-lab.5gfhKE/.treehouse-homes/sm-abc123
+/tmp/fm-th-lab.5gfhKE/.treehouse-homes/sm-abc123/.treehouse
+/tmp/fm-th-lab.5gfhKE/.treehouse-homes/sm-abc123/.treehouse/proj-1b7ca5
+/tmp/fm-th-lab.5gfhKE/.treehouse-homes/sm-abc123/.treehouse/.gitignore
+/tmp/fm-th-lab.5gfhKE/.treehouse-homes/sm-abc123/.treehouse/proj-1b7ca5/1
+/tmp/fm-th-lab.5gfhKE/.treehouse-homes/sm-abc123/.treehouse/proj-1b7ca5/treehouse-state.json
+/tmp/fm-th-lab.5gfhKE/.treehouse-homes/sm-abc123/.treehouse/proj-1b7ca5/treehouse-state.lock
+/tmp/fm-th-lab.5gfhKE/.treehouse-homes/sm-abc123/.treehouse/proj-1b7ca5/1/proj
