@@ -2374,7 +2374,7 @@ test_truncated_required_page_is_unreadable() {
   case_dir=$(make_case github-required-truncated)
   mkdir -p "$case_dir/wt"
   add_gh_mocks "$case_dir" "$head"
-  write_github_rollup_json_with_state "$case_dir" "$head" UNSTABLE \
+  write_github_rollup_json_with_state "$case_dir" "$head" BLOCKED \
     "$(check_run build COMPLETED FAILURE 2024-01-01T00:00:00Z)"
   write_github_required_json "$case_dir" "$head" true gate:true
 
@@ -2387,6 +2387,8 @@ test_truncated_required_page_is_unreadable() {
   expect_code 1 "$rc" "required-truncated: a truncated required set must not narrow"
   assert_grep 'could not read which checks main requires' "$case_dir/stderr" \
     "required-truncated: a partial answer was treated as complete"
+  assert_grep "check 'build' is not green" "$case_dir/stderr" \
+    "required-truncated: a check outside the partial answer stopped being judged"
   assert_no_grep 'pr merge' "$case_dir/gh.log" \
     "required-truncated: gh pr merge ran on a partial required set"
   pass "fm-pr-merge refuses a required set whose context page was truncated"
@@ -2448,14 +2450,17 @@ test_blocked_merge_state_refuses_a_narrowed_merge() {
 }
 
 # The attended waiver keeps working on the checks that do gate, which is the
-# only place it was ever needed.
+# only place it was ever needed - and that is exactly the state GitHub reports
+# BLOCKED, because a red required check is what BLOCKED means. The narrowing's
+# own cross-check against that verdict must not quietly revoke the waiver, so
+# it stands aside here and says which authority bypassed it.
 test_allow_red_still_waives_a_required_check() {
   local case_dir head
   head=6666666666666666666666666666666666666666
   case_dir=$(make_case github-required-allow-red)
   mkdir -p "$case_dir/wt"
   add_gh_mocks "$case_dir" "$head"
-  write_github_rollup_json_with_state "$case_dir" "$head" UNSTABLE \
+  write_github_rollup_json_with_state "$case_dir" "$head" BLOCKED \
     "$(check_run gate COMPLETED FAILURE 2024-01-01T00:00:00Z)"
   write_github_required_json "$case_dir" "$head" false gate:true
 
@@ -2464,7 +2469,34 @@ test_allow_red_still_waives_a_required_check() {
     > "$case_dir/stdout" 2> "$case_dir/stderr" \
     || fail "required-allow-red: a named waiver on a required check should merge"
   assert_logged_gh_merge "$case_dir" 208 example/repo --squash
-  pass "fm-pr-merge still waives a named required check with --allow-red"
+  assert_grep 'mergeStateStatus BLOCKED, and the attended --allow-red waiver covers a check main requires: gate' \
+    "$case_dir/stderr" "required-allow-red: the bypassed cross-check was invisible"
+  pass "fm-pr-merge still waives a required check GitHub reports BLOCKED"
+}
+
+# The other attended authority the cross-check must not revoke: an explicit
+# captain instruction merging through --admin, whose whole purpose is a pull
+# request GitHub reports BLOCKED for something no check reports - a missing
+# required approval here, with every required check green.
+test_attended_override_still_merges_a_blocked_pull_request() {
+  local case_dir head
+  head=9999999999999999999999999999999999999999
+  case_dir=$(make_case github-narrowed-blocked-attended)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  write_github_rollup_json_with_state "$case_dir" "$head" BLOCKED \
+    "$(check_run gate COMPLETED SUCCESS 2024-01-01T00:00:00Z)" \
+    "$(check_run advisory COMPLETED FAILURE 2024-01-01T00:00:00Z)"
+  write_github_required_json "$case_dir" "$head" false gate:true advisory:false
+
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/212 \
+    --attended-override -- --squash --admin \
+    > "$case_dir/stdout" 2> "$case_dir/stderr" \
+    || fail "narrowed-blocked-attended: an attended --admin merge should still run"
+  assert_logged_gh_merge "$case_dir" 212 example/repo --squash --admin
+  assert_grep 'mergeStateStatus BLOCKED, and --attended-override is in effect' "$case_dir/stderr" \
+    "narrowed-blocked-attended: the bypassed cross-check was invisible"
+  pass "fm-pr-merge lets an attended override merge a pull request GitHub reports BLOCKED"
 }
 
 # Narrowing filters the red set the supersession rule already produced, so a
@@ -2490,7 +2522,7 @@ test_supersession_still_applies_under_narrowing() {
   case_dir=$(make_case github-narrowed-current-failure)
   mkdir -p "$case_dir/wt"
   add_gh_mocks "$case_dir" "$head"
-  write_github_rollup_json_with_state "$case_dir" "$head" UNSTABLE \
+  write_github_rollup_json_with_state "$case_dir" "$head" BLOCKED \
     "$(check_run gate COMPLETED SUCCESS 2024-01-01T00:00:00Z)" \
     "$(check_run gate COMPLETED FAILURE 2024-01-01T01:00:00Z)"
   write_github_required_json "$case_dir" "$head" false gate:true
@@ -2517,7 +2549,7 @@ test_required_check_name_containing_a_comma_is_reported_intact() {
   case_dir=$(make_case github-required-comma)
   mkdir -p "$case_dir/wt"
   add_gh_mocks "$case_dir" "$head"
-  write_github_rollup_json_with_state "$case_dir" "$head" UNSTABLE \
+  write_github_rollup_json_with_state "$case_dir" "$head" CLEAN \
     "$(check_run "$required" COMPLETED SUCCESS 2024-01-01T00:00:00Z)"
   write_github_required_json "$case_dir" "$head" false "$required:true"
 
@@ -3499,5 +3531,6 @@ test_truncated_required_page_is_unreadable
 test_required_set_without_the_forge_flag_is_unreadable
 test_blocked_merge_state_refuses_a_narrowed_merge
 test_allow_red_still_waives_a_required_check
+test_attended_override_still_merges_a_blocked_pull_request
 test_supersession_still_applies_under_narrowing
 test_required_check_name_containing_a_comma_is_reported_intact

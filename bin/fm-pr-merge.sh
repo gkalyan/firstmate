@@ -21,7 +21,8 @@
 # is the older and stricter rule - a failed read never narrows what is judged.
 # Narrowing also cross-checks itself against GitHub's own mergeStateStatus, so a
 # pull request the forge still reports BLOCKED is refused even when every check
-# this guard judged was green.
+# this guard judged was green, unless an attended --allow-red waiver or
+# --attended-override already decided that state, which the run says out loud.
 # Every run says which checks it judged and which it ignored, on both outcomes.
 # Every failing condition is reported, not
 # just the first. The verified head is then passed to gh as
@@ -689,7 +690,7 @@ NAMES
 # Pre-merge conditions for a GitHub pull request, read from one live view.
 # Sets FM_PR_MERGE_HEAD to the verified head on success.
 github_verify_mergeable() {
-  local json fields line red name covered ignored required_display
+  local json fields line red name covered ignored waived required_display
   local total=0 named=0 refusals=''
   local state='' draft='' mergeable='' merge_state='' live_head='' base=''
 
@@ -766,6 +767,7 @@ FIELDS
 
   uncovered=''
   ignored=''
+  waived=''
   while IFS= read -r name; do
     [ -n "$name" ] || continue
     if [ "$FM_PR_GITHUB_REQUIRED_STATUS" = declared ] \
@@ -779,11 +781,13 @@ FIELDS
         [ "$check" = "$name" ] && covered=1
       done
     fi
-    [ "$covered" -eq 1 ] || {
+    if [ "$covered" -eq 1 ]; then
+      waived="${waived:+$waived, }$name"
+    else
       refusals="$refusals  - check '$name' is not green
 "
       uncovered="${uncovered:+$uncovered, }$name"
-    }
+    fi
   done <<EOF
 $red
 EOF
@@ -827,10 +831,27 @@ NAMES
   # no extra read - mergeStateStatus is already in the live view above - and it
   # is applied only when narrowing, so a base branch that requires nothing keeps
   # exactly the behaviour it has today, where BLOCKED never refused on its own.
+  #
+  # What the cross-check guards is this guard's own narrowing, not a human's
+  # decision, so it steps aside for the two paths where an attended caller has
+  # already ruled on exactly this state: a --allow-red waiver is a captain's
+  # judgement about a named, known-red required check, which is precisely what
+  # GitHub reports BLOCKED for, and --attended-override carries the explicit
+  # instruction behind flags like --admin, whose whole purpose is merging a
+  # BLOCKED pull request. Refusing either would let a cross-check on the
+  # narrowing silently revoke an authority that predates it, so each bypass is
+  # announced instead of being invisible.
   if [ "$FM_PR_GITHUB_REQUIRED_STATUS" = declared ] \
     && [ -z "$refusals" ] && [ "$merge_state" = BLOCKED ]; then
-    refusals="$refusals  - every check $base requires is green, but GitHub still reports mergeStateStatus BLOCKED, so something it requires is unsatisfied
+    if [ -n "$waived" ]; then
+      printf 'notice: GitHub reports mergeStateStatus BLOCKED, and the attended --allow-red waiver covers a check %s requires: %s\n' \
+        "$base" "$waived" >&2
+    elif [ "$ATTENDED_OVERRIDE" = true ]; then
+      printf 'notice: GitHub reports mergeStateStatus BLOCKED, and --attended-override is in effect, so the merge proceeds under that attended authority\n' >&2
+    else
+      refusals="$refusals  - every check $base requires is green, but GitHub still reports mergeStateStatus BLOCKED, so something it requires is unsatisfied
 "
+    fi
   fi
 
   if [ -n "$refusals" ]; then
