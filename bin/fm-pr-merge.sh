@@ -615,7 +615,7 @@ FM_PR_GITHUB_REQUIRED_STATUS=unreadable
 FM_PR_GITHUB_REQUIRED_NAMES=
 github_read_required_checks() {
   local verified_head=$1 fields line name
-  local oid='' more='' names='' oid_seen=0 more_seen=0
+  local oid='' more='' required_names='' oid_seen=0 more_seen=0
 
   FM_PR_GITHUB_REQUIRED_STATUS=unreadable
   FM_PR_GITHUB_REQUIRED_NAMES=
@@ -665,7 +665,7 @@ github_read_required_checks() {
         # keeping it would only match the rollup's "(unnamed check)" placeholder
         # by coincidence.
         [ -n "$name" ] || continue
-        names="${names:+$names
+        required_names="${required_names:+$required_names
 }$name"
         ;;
       '') continue ;;
@@ -679,8 +679,8 @@ FIELDS
   [ "$more" = false ] || return 0
   [ "$oid" = "$verified_head" ] || return 0
 
-  FM_PR_GITHUB_REQUIRED_NAMES=$names
-  if [ -n "$names" ]; then
+  FM_PR_GITHUB_REQUIRED_NAMES=$required_names
+  if [ -n "$required_names" ]; then
     FM_PR_GITHUB_REQUIRED_STATUS=declared
   else
     FM_PR_GITHUB_REQUIRED_STATUS=none
