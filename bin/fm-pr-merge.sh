@@ -623,6 +623,13 @@ github_read_required_checks() {
   command -v gh >/dev/null 2>&1 || return 0
   fm_pr_head_valid "$verified_head" || return 0
 
+  # owner and repo are passed with gh's raw-string flag rather than the typed
+  # one on purpose: the typed flag sends a value that looks like a JSON scalar
+  # with that JSON type, so an all-numeric login goes as an Int and a repository
+  # named true, false, or null goes as that literal, and GraphQL rejects both
+  # against String!. The read would then fail in exactly those repositories and
+  # silently leave every check judged there forever, which
+  # test_numeric_owner_still_reads_the_required_set pins.
   # shellcheck disable=SC2016  # GraphQL variables are literal query syntax.
   fields=$(gh api graphql \
     -f query='query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$number){commits(last:1){nodes{commit{oid statusCheckRollup{contexts(first:100){pageInfo{hasNextPage} nodes{__typename ... on CheckRun{name isRequired(pullRequestNumber:$number)} ... on StatusContext{context isRequired(pullRequestNumber:$number)}}}}}}}}}}' \
