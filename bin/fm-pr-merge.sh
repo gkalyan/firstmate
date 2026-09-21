@@ -626,7 +626,7 @@ github_read_required_checks() {
   # shellcheck disable=SC2016  # GraphQL variables are literal query syntax.
   fields=$(gh api graphql \
     -f query='query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$number){commits(last:1){nodes{commit{oid statusCheckRollup{contexts(first:100){pageInfo{hasNextPage} nodes{__typename ... on CheckRun{name isRequired(pullRequestNumber:$number)} ... on StatusContext{context isRequired(pullRequestNumber:$number)}}}}}}}}}}' \
-    -F "owner=$PR_OWNER" -F "repo=$PR_REPO" -F "number=$PR_NUMBER" \
+    -f "owner=$PR_OWNER" -f "repo=$PR_REPO" -F "number=$PR_NUMBER" \
     --jq '
       (.data.repository.pullRequest.commits.nodes // []) as $nodes
       | if ($nodes | length) != 1 then error("no head commit") else . end

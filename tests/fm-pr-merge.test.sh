@@ -197,6 +197,33 @@ case "${1:-} ${2:-}" in
     # decides what is required is exercised rather than stubbed past.
     case " $* " in
       *isRequired*)
+        # gh's typed flag sends a value that looks like a JSON scalar with that
+        # JSON type, and GraphQL then rejects it against String!. Real gh fails
+        # here, so the mock does too, for the required read this change owns.
+        prev=''
+        for arg in "$@"; do
+          case "$prev" in
+            -F|--field)
+              case "$arg" in
+                owner=*|repo=*)
+                  value=${arg#*=}
+                  case "$value" in
+                    '') ;;
+                    true|false|null) typed=1 ;;
+                    *[!0-9]*) ;;
+                    *) typed=1 ;;
+                  esac
+                  if [ "${typed:-0}" -eq 1 ]; then
+                    printf 'error: Variable $%s of type String! was provided invalid value\n' \
+                      "${arg%%=*}" >&2
+                    exit 1
+                  fi
+                  ;;
+              esac
+              ;;
+          esac
+          prev=$arg
+        done
         if [ -f "${FM_TEST_GH_REQUIRED_FAIL:-}" ]; then
           echo 'error: could not reach the GitHub API' >&2
           exit 1
@@ -2560,6 +2587,34 @@ test_required_check_name_containing_a_comma_is_reported_intact() {
   pass "fm-pr-merge reports a required check name containing commas intact"
 }
 
+# GitHub logins may be all digits, and a repository may be named for a JSON
+# literal. gh's typed flag would send such a value as an Int or a boolean, which
+# GraphQL rejects against String!, and the read degrades to unreadable in
+# silence - leaving exactly the repositories this narrowing exists for judged on
+# every check again.
+test_numeric_owner_still_reads_the_required_set() {
+  local case_dir head
+  head=1010101010101010101010101010101010101010
+  case_dir=$(make_case github-required-numeric-owner)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  write_github_rollup_json_with_state "$case_dir" "$head" UNSTABLE \
+    "$(check_run type-check COMPLETED SUCCESS 2024-01-01T00:00:00Z)" \
+    "$(check_run 'advisory (non-blocking): build' COMPLETED FAILURE 2024-01-01T00:00:00Z)"
+  write_github_required_json "$case_dir" "$head" false \
+    type-check:true 'advisory (non-blocking): build:false'
+
+  run_pr_merge "$case_dir" task-x1 https://github.com/1337/ci-tools/pull/213 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr" \
+    || fail "required-numeric-owner: an all-numeric owner should not stop the required set being read"
+  assert_logged_gh_merge "$case_dir" 213 1337/ci-tools --squash
+  assert_grep 'main requires these checks: type-check' "$case_dir/stderr" \
+    "required-numeric-owner: the required set degraded to unreadable for an all-numeric owner"
+  assert_no_grep 'could not read which checks main requires' "$case_dir/stderr" \
+    "required-numeric-owner: the read failed and the run judged every check"
+  pass "fm-pr-merge reads the required set in a repository whose owner is all-numeric"
+}
+
 
 test_github_zero_exit_queue_required_refuses_with_exact_retry
 test_github_closed_unqueued_outcome_omits_retry_flags
@@ -3533,3 +3588,4 @@ test_allow_red_still_waives_a_required_check
 test_attended_override_still_merges_a_blocked_pull_request
 test_supersession_still_applies_under_narrowing
 test_required_check_name_containing_a_comma_is_reported_intact
+test_numeric_owner_still_reads_the_required_set
