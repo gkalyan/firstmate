@@ -1,0 +1,21 @@
+Targeted run of the 13 required-check-narrowing cases in tests/fm-pr-merge.test.sh (fixture-driven gh, current HEAD b601206):
+
+ok - fm-pr-merge merges when only checks the base branch does not require are red
+ok - fm-pr-merge still refuses a red check the base branch requires
+ok - fm-pr-merge judges every check when the base branch requires none
+ok - fm-pr-merge judges every check when the required set cannot be read
+ok - fm-pr-merge refuses a required set read at a different head
+ok - fm-pr-merge refuses a required set whose context page was truncated
+ok - fm-pr-merge refuses a required set whose contexts carry no required flag
+ok - fm-pr-merge refuses a narrowed merge GitHub still reports as blocked
+ok - fm-pr-merge still waives a required check GitHub reports BLOCKED
+ok - fm-pr-merge lets an attended override merge a pull request GitHub reports BLOCKED
+ok - fm-pr-merge keeps run supersession under a narrowed required set
+ok - fm-pr-merge reports a required check name containing commas intact
+ok - fm-pr-merge reads the required set in a repository whose owner is all-numeric
+
+Same numeric-owner case with bin/fm-pr-merge.sh:629 reverted to the typed flags (-F owner=... -F repo=...):
+
+not ok - required-numeric-owner: an all-numeric owner should not stop the required set being read
+
+so the new regression case fails before the flag change and passes after it.

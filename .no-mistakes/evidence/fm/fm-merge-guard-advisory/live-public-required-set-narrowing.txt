@@ -1,0 +1,61 @@
+== LIVE, READ-ONLY: narrowing over a real PUBLIC repo whose base branch declares required checks ==
+
+Repository: cli/cli (public). Base branch: trunk. Every forge read below went to real github.com
+through the operator's own gh auth; only 'gh pr merge' was intercepted by the driver, so no write
+of any kind reached the repository (gh call logs below contain no 'pr merge' line).
+
+--- live required-set read, cli/cli#14035 (gh api graphql, the change's own document) ---
+{"base":"trunk","checks":[{"conclusion":"FAILURE","isRequired":false,"name":"lint"},{"conclusion":"SUCCESS","isRequired":false,"name":"CodeQL-Build (go, manual, ./.github/codeql/codeql-config.yml)"},{"conclusion":"SUCCESS","isRequired":true,"name":"build (ubuntu-latest)"},{"conclusion":"SUCCESS","isRequired":false,"name":"CodeQL-Build (actions, none, security-and-quality)"},{"conclusion":"SUCCESS","isRequired":true,"name":"build (windows-latest)"},{"conclusion":"SUCCESS","isRequired":true,"name":"build (macos-latest)"},{"conclusion":"SUCCESS","isRequired":false,"name":"govulncheck"},{"conclusion":"SUCCESS","isRequired":false,"name":"integration-tests (ubuntu-latest)"},{"conclusion":"SUCCESS","isRequired":false,"name":"integration-tests (windows-latest)"},{"conclusion":"SUCCESS","isRequired":false,"name":"integration-tests (macos-latest)"},{"conclusion":"SUCCESS","isRequired":false,"name":"CodeQL"}],"head":"09b7ae0d2971508ab1ca0afe2a0fe973b337f4b8","mergeStateStatus":"DIRTY","mergeable":"CONFLICTING"}
+
+--- bin/fm-pr-merge.sh driven over that live state (driver/drive-public.sh) ---
+--- exit: 1
+--- stderr:
+notice: trunk requires these checks: build (ubuntu-latest), build (windows-latest), build (macos-latest)
+notice: not judged, because trunk does not require them: lint
+error: refusing to merge https://github.com/cli/cli/pull/14035
+  - the pull request is a draft
+  - mergeable is "CONFLICTING", not MERGEABLE
+  - mergeStateStatus is DIRTY (conflicts)
+--- gh calls (live, proxied to real gh):
+pr view https://github.com/cli/cli/pull/14035 --json headRefOid -q .headRefOid
+pr view https://github.com/cli/cli/pull/14035 --json state,isDraft,mergeable,mergeStateStatus,headRe
+api graphql -f query=query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$
+    
+
+JUDGED:  build (ubuntu-latest), build (windows-latest), build (macos-latest)  [trunk requires these]
+IGNORED: lint  [FAILURE at head, trunk does not require it - the guard does not refuse on it]
+Note: this pull request is a draft with a merge conflict, so the guard still refuses - on draft and
+DIRTY, NOT on the red 'lint'. Pre-change, 'check 'lint' is not green' would have been in that list.
+
+--- same script, live, cli/cli#14475: required set all green but the forge reports BLOCKED ---
+--- exit: 1
+--- stderr:
+notice: trunk requires these checks: build (ubuntu-latest), build (windows-latest), build (macos-latest)
+error: refusing to merge https://github.com/cli/cli/pull/14475
+  - every check trunk requires is green, but GitHub still reports mergeStateStatus BLOCKED, so something it requires is unsatisfied
+--- gh calls (live, proxied to real gh):
+pr view https://github.com/cli/cli/pull/14475 --json headRefOid -q .headRefOid
+pr view https://github.com/cli/cli/pull/14475 --json state,isDraft,mergeable,mergeStateStatus,headRe
+api graphql -f query=query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$
+    
+
+--- proof no merge was attempted ---
+/tmp/fmdrive/public/cli-14035/gh.log:0
+/tmp/fmdrive/public/cli-14475/gh.log:0
+
+--- BEFORE/AFTER over the SAME live cli/cli#14035 state: base commit d2d718f vs the change ---
+BEFORE (d2d718f), live reads, merge intercepted:
+--- exit: 1
+--- stderr:
+error: refusing to merge https://github.com/cli/cli/pull/14035
+  - the pull request is a draft
+  - mergeable is "CONFLICTING", not MERGEABLE
+  - mergeStateStatus is DIRTY (conflicts)
+  - check 'lint' is not green
+error: these checks are not green: lint
+--- gh calls (live, proxied to real gh):
+pr view https://github.com/cli/cli/pull/14035 --json headRefOid -q .headRefOid
+pr view https://github.com/cli/cli/pull/14035 --json state,isDraft,mergeable,mergeStateStatus,headRe
+
+AFTER: see the run above - no 'check ''lint'' is not green' line, and lint is named on the ignored notice.
+merge calls in the BEFORE run: 0

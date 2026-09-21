@@ -1,0 +1,1 @@
+{"data": {"repository": {"pullRequest": {"commits": {"nodes": [{"commit": {"oid": "2222222222222222222222222222222222222222", "statusCheckRollup": {"contexts": {"pageInfo": {"hasNextPage": false}, "nodes": [{"__typename": "CheckRun", "name": "type-check", "isRequired": true}, {"__typename": "CheckRun", "name": "advisory (non-blocking): build", "isRequired": false}]}}}}]}}}}}

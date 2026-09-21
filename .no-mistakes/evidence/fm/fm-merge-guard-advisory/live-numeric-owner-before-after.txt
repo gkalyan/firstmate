@@ -1,0 +1,28 @@
+Live before/after of the flag change, against real GitHub. Owner login "1337" is a real GitHub user
+(gh api users/1337 -> login 1337, type User), so an all-numeric owner is not hypothetical.
+
+--- 1. The failure mode, straight from api.github.com (the change's own GraphQL document) ---
+
+$ gh api graphql -f query='query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$number){baseRefName}}}' -F owner=1337 -F repo=ci-tools -F number=1
+{"errors":[{"extensions":{"value":1337,"problems":[{"path":[],"explanation":"Could not coerce value 1337 to String"}]},...,"message":"Variable $owner of type String! was provided invalid value"}]}
+gh: Variable $owner of type String! was provided invalid value        <- gh exits nonzero: the read is lost
+
+$ gh api graphql -f query='...same...' -f owner=1337 -f repo=ci-tools -F number=1
+{"data":{"repository":null},"errors":[{"type":"NOT_FOUND",...,"message":"Could not resolve to a Repository with the name '1337/ci-tools'."}]}
+                                                                      <- the String! variable is accepted; only the repo name is unknown
+
+--- 2. The product, driven live and read-only against a real numeric-owner pull request ---
+
+BEFORE (bin/fm-pr-merge.sh:629 with -F "owner=..." -F "repo=..."):
+error: refusing to merge https://github.com/1337/better-time-picker/pull/4 (could not read which checks master requires, so every check was judged)
+  - state is "MERGED", not open
+  - mergeable is "UNKNOWN", not MERGEABLE
+
+AFTER (the shipped -f "owner=..." -f "repo=..." -F "number=..."):
+error: refusing to merge https://github.com/1337/better-time-picker/pull/4
+  - state is "MERGED", not open
+  - mergeable is "UNKNOWN", not MERGEABLE
+
+The degraded suffix is gone: the required-set read now succeeds in a repository whose owner is all-numeric,
+so the guard is no longer permanently stuck judging every check there. Both runs are read-only - the harness
+shim refuses every gh write, and neither run reached `gh pr merge`.

@@ -1,0 +1,139 @@
+fm-pr-merge.sh driven as an operator runs it, against a gh stub reproducing gh's
+flag semantics and GitHub's GraphQL variable coercion. Fixtures mirror the real
+gkalyan/ue-frontend PR 2 rollup: three gating checks green, two advisory red.
+
+######## incident, BEFORE the change (script at base commit d2d718f)
+$ fm-pr-merge.sh task-x1 https://github.com/gkalyan/ue-frontend/pull/2
+--- exit: 1
+--- stderr:
+error: refusing to merge https://github.com/gkalyan/ue-frontend/pull/2
+  - check 'advisory (non-blocking): build' is not green
+  - check 'advisory (non-blocking): lint, lint:types, lint:status-labels, test:process-flow' is not green
+error: these checks are not green: advisory (non-blocking): build, advisory (non-blocking): lint, lint:types, lint:status-labels, test:process-flow
+--- gh calls:
+
+######## incident-after-advisory-tier-merges
+$ fm-pr-merge.sh task-x1 https://github.com/gkalyan/ue-frontend/pull/2
+--- exit: 0
+--- stderr:
+notice: main requires these checks: type-check, lint:blueprint, quality-ratchet
+notice: not judged, because main does not require them: advisory (non-blocking): build, advisory (non-blocking): lint, lint:types, lint:status-labels, test:process-flow
+verified: https://github.com/gkalyan/ue-frontend/pull/2 is open and mergeable, with every check main requires green at head 1111111111111111111111111111111111111111
+--- gh calls:
+api graphql -f query=query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(nu
+pr merge 2 --repo gkalyan/ue-frontend --match-head-commit 1111111111111111111111111111111111111111 --squash
+api graphql -f query=query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(nu
+
+######## gating-check-red-still-refuses
+$ fm-pr-merge.sh task-x1 https://github.com/gkalyan/ue-frontend/pull/3
+--- exit: 1
+--- stderr:
+notice: main requires these checks: type-check
+notice: not judged, because main does not require them: advisory (non-blocking): build
+error: refusing to merge https://github.com/gkalyan/ue-frontend/pull/3
+  - check 'type-check' is not green
+error: these checks are not green: type-check
+--- gh calls:
+api graphql -f query=query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(nu
+
+######## base-branch-requires-nothing-stays-strict
+$ fm-pr-merge.sh task-x1 https://github.com/gkalyan/ue-frontend/pull/4
+--- exit: 1
+--- stderr:
+error: refusing to merge https://github.com/gkalyan/ue-frontend/pull/4
+  - check 'advisory (non-blocking): build' is not green
+error: these checks are not green: advisory (non-blocking): build
+--- gh calls:
+api graphql -f query=query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(nu
+
+######## forge-still-blocked-refuses-narrowed-merge
+$ fm-pr-merge.sh task-x1 https://github.com/gkalyan/ue-frontend/pull/5
+--- exit: 1
+--- stderr:
+notice: main requires these checks: type-check
+notice: not judged, because main does not require them: advisory (non-blocking): build
+error: refusing to merge https://github.com/gkalyan/ue-frontend/pull/5
+  - every check main requires is green, but GitHub still reports mergeStateStatus BLOCKED, so something it requires is unsatisfied
+--- gh calls:
+api graphql -f query=query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(nu
+
+######## truncated-required-page-never-narrows
+$ fm-pr-merge.sh task-x1 https://github.com/gkalyan/ue-frontend/pull/6
+--- exit: 1
+--- stderr:
+error: refusing to merge https://github.com/gkalyan/ue-frontend/pull/6 (could not read which checks main requires, so every check was judged)
+  - check 'advisory (non-blocking): build' is not green
+error: these checks are not green: advisory (non-blocking): build
+--- gh calls:
+api graphql -f query=query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(nu
+
+######## allow-red-waiver-survives-blocked
+$ fm-pr-merge.sh task-x1 https://github.com/gkalyan/ue-frontend/pull/7 --allow-red type-check
+--- exit: 0
+--- stderr:
+notice: main requires these checks: type-check
+notice: not judged, because main does not require them: advisory (non-blocking): build
+notice: GitHub reports mergeStateStatus BLOCKED, and the attended --allow-red waiver covers a check main requires: type-check
+verified: https://github.com/gkalyan/ue-frontend/pull/7 is open and mergeable, with every check main requires green at head 5555555555555555555555555555555555555555
+--- gh calls:
+api graphql -f query=query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(nu
+pr merge 7 --repo gkalyan/ue-frontend --match-head-commit 5555555555555555555555555555555555555555 --squash
+api graphql -f query=query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(nu
+
+######## attended-override-merges-blocked
+$ fm-pr-merge.sh task-x1 https://github.com/gkalyan/ue-frontend/pull/8 --attended-override -- --squash --admin
+--- exit: 0
+--- stderr:
+notice: main requires these checks: type-check
+notice: not judged, because main does not require them: advisory (non-blocking): build
+notice: GitHub reports mergeStateStatus BLOCKED, and --attended-override is in effect, so the merge proceeds under that attended authority
+verified: https://github.com/gkalyan/ue-frontend/pull/8 is open and mergeable, with every check main requires green at head 4444444444444444444444444444444444444444
+--- gh calls:
+api graphql -f query=query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(nu
+pr merge 8 --repo gkalyan/ue-frontend --match-head-commit 4444444444444444444444444444444444444444 --squash --admin
+api graphql -f query=query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(nu
+
+######## required-set read fails -> degraded, every check judged
+$ fm-pr-merge.sh task-x1 https://github.com/gkalyan/ue-frontend/pull/9   (gh graphql returns HTTP 502)
+--- exit: 1
+--- stderr:
+error: refusing to merge https://github.com/gkalyan/ue-frontend/pull/9 (could not read which checks main requires, so every check was judged)
+  - check 'advisory (non-blocking): build' is not green
+  - check 'advisory (non-blocking): lint, lint:types, lint:status-labels, test:process-flow' is not green
+error: these checks are not green: advisory (non-blocking): build, advisory (non-blocking): lint, lint:types, lint:status-labels, test:process-flow
+--- gh calls:
+api graphql -f query=query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(nu
+
+######## all-numeric owner, BEFORE the raw-string flag fix (script at ac561e0)
+$ fm-pr-merge.sh task-x1 https://github.com/1337/ci-tools/pull/10
+--- exit: 1
+--- stderr:
+error: refusing to merge https://github.com/1337/ci-tools/pull/10 (could not read which checks main requires, so every check was judged)
+  - check 'advisory (non-blocking): build' is not green
+error: these checks are not green: advisory (non-blocking): build
+--- gh calls:
+api graphql -f query=query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(nu
+
+######## all-numeric-owner-after-fix
+$ fm-pr-merge.sh task-x1 https://github.com/1337/ci-tools/pull/10
+--- exit: 0
+--- stderr:
+notice: main requires these checks: type-check
+notice: not judged, because main does not require them: advisory (non-blocking): build
+verified: https://github.com/1337/ci-tools/pull/10 is open and mergeable, with every check main requires green at head 6666666666666666666666666666666666666666
+--- gh calls:
+api graphql -f query=query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(nu
+pr merge 10 --repo 1337/ci-tools --match-head-commit 6666666666666666666666666666666666666666 --squash
+api graphql -f query=query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(nu
+
+
+######## a check NAMED advisory but flagged required by the forge still refuses
+$ fm-pr-merge.sh task-x1 https://github.com/gkalyan/ue-frontend/pull/11
+--- exit: 1
+--- stderr:
+notice: main requires these checks: type-check, advisory (non-blocking): build
+error: refusing to merge https://github.com/gkalyan/ue-frontend/pull/11
+  - check 'advisory (non-blocking): build' is not green
+error: these checks are not green: advisory (non-blocking): build
+--- gh calls:
+api graphql -f query=query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(nu

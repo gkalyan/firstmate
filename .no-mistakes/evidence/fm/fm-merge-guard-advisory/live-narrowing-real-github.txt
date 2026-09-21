@@ -1,0 +1,85 @@
+Live, read-only runs of bin/fm-pr-merge.sh (HEAD b601206) against real pull requests on github.com.
+Every gh read hit the real API. The harness gh shim refuses every write (pr merge/edit/close/review/comment,
+any -X or GraphQL mutation), so no pull request state anywhere was changed - the per-run call log shows
+`gh pr merge` was never even reached.
+
+### live run: https://github.com/cli/cli/pull/14035
+--- exit=1
+--- stderr:
+notice: trunk requires these checks: build (ubuntu-latest), build (windows-latest), build (macos-latest)
+notice: not judged, because trunk does not require them: lint
+error: refusing to merge https://github.com/cli/cli/pull/14035
+  - the pull request is a draft
+  - mergeable is "CONFLICTING", not MERGEABLE
+  - mergeStateStatus is DIRTY (conflicts)
+--- gh subcommands invoked:
+  pr view https://github.com/cli/cli/pull/14035 --json headRef
+  pr view https://github.com/cli/cli/pull/14035 --json state,i
+  api graphql  <the required-set read this change owns: -f owner -f repo -F number>
+### live run: https://github.com/cli/cli/pull/14475
+--- exit=1
+--- stderr:
+notice: trunk requires these checks: build (ubuntu-latest), build (windows-latest), build (macos-latest)
+error: refusing to merge https://github.com/cli/cli/pull/14475
+  - every check trunk requires is green, but GitHub still reports mergeStateStatus BLOCKED, so something it requires is unsatisfied
+--- gh subcommands invoked:
+  pr view https://github.com/cli/cli/pull/14475 --json headRef
+  pr view https://github.com/cli/cli/pull/14475 --json state,i
+  api graphql  <the required-set read this change owns: -f owner -f repo -F number>
+### live run: https://github.com/home-assistant/core/pull/182799
+--- exit=1
+--- stderr:
+notice: dev requires these checks: Collect information & changes data, Check hassfest, Check all requirements, docs-missing, blocking-label-awaiting-frontend, cla-bot, code-owner-approval, required-labels
+error: refusing to merge https://github.com/home-assistant/core/pull/182799
+  - the pull request is a draft
+  - check 'docs-missing' is not green
+error: these checks are not green: docs-missing
+--- gh subcommands invoked:
+  pr view https://github.com/home-assistant/core/pull/182799 -
+  pr view https://github.com/home-assistant/core/pull/182799 -
+  api graphql  <the required-set read this change owns: -f owner -f repo -F number>
+### live run: https://github.com/gkalyan/firstmate/pull/2
+--- exit=1
+--- stderr:
+error: refusing to merge https://github.com/gkalyan/firstmate/pull/2
+  - check 'Behavior tests (Herdr)' is not green
+  - check 'Lint' is not green
+error: these checks are not green: Behavior tests (Herdr), Lint
+--- gh subcommands invoked:
+  pr view https://github.com/gkalyan/firstmate/pull/2 --json h
+  pr view https://github.com/gkalyan/firstmate/pull/2 --json s
+  api graphql  <the required-set read this change owns: -f owner -f repo -F number>
+### live run: https://github.com/1337/better-time-picker/pull/4
+--- exit=1
+--- stderr:
+error: refusing to merge https://github.com/1337/better-time-picker/pull/4
+  - state is "MERGED", not open
+  - mergeable is "UNKNOWN", not MERGEABLE
+--- gh subcommands invoked:
+  pr view https://github.com/1337/better-time-picker/pull/4 --
+  pr view https://github.com/1337/better-time-picker/pull/4 --
+  api graphql  <the required-set read this change owns: -f owner -f repo -F number>
+
+=== What GitHub itself reports for each of those pull requests (independent read of the same rollup) ===
+
+cli/cli#14035, base trunk - the incident shape: a genuinely failing check the base branch does not require
+  lint                                             | FAILURE | required=false   <- ignored by the guard
+  build (ubuntu-latest|windows-latest|macos-latest) | SUCCESS | required=true
+  CodeQL, CodeQL-Build x2, govulncheck, integration-tests x3 | SUCCESS | required=false
+  The refusal above names only draft/conflict. Before this change it would also have carried
+  "check 'lint' is not green" - the exact refusal the ue-frontend incident hit.
+
+cli/cli#14475, base trunk - every context SUCCESS, three required build checks, mergeStateStatus BLOCKED
+  Narrowing found nothing red; the BLOCKED cross-check refused anyway, live.
+
+home-assistant/core#182799, base dev - a check the base branch DOES require is red
+  docs-missing | FAILURE | required=true           <- named in the refusal
+  ten other non-SUCCESS contexts (SKIPPED)         | required=false  <- none of them named
+  dev declares eight required checks; the guard listed them and refused on the one required red.
+
+gkalyan/firstmate#2, base main - base branch declares NOTHING required (every context required=false)
+  Lint | FAILURE, Behavior tests (Herdr) | FAILURE, twelve others SUCCESS
+  No narrowing notice is printed and every check is judged: strict all-green is preserved where the
+  forge declares no required set, which is the settled decision for this change.
+
+1337/better-time-picker#4 - a real all-numeric GitHub owner login. See live-numeric-owner-before-after.txt.

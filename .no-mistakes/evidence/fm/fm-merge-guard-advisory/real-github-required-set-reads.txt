@@ -1,0 +1,34 @@
+Read-only checks against real github.com, using the change's own GraphQL document.
+
+== gh's typed flag (-F), all-numeric owner: the defect commit b601206 fixes ==
+$ gh api graphql -f query=<required-set query> -F owner=1337 -F repo=ci-tools -F number=1
+{"errors":[{"extensions":{"value":1337,"problems":[{"path":[],"explanation":"Could not coerce value 1337 to String"}]},"locations":[{"line":1,"column":7}],"message":"Variable $owner of type String! was provided invalid value"}]}gh: Variable $owner of type String! was provided invalid value
+exit=1
+
+== gh's raw-string flag (-f), same owner: the variable is accepted as a String ==
+$ gh api graphql -f query=<required-set query> -f owner=1337 -f repo=ci-tools -F number=1
+{"data":{"repository":null},"errors":[{"type":"NOT_FOUND","path":["repository"],"locations":[{"line":1,"column":50}],"message":"Could not resolve to a Repository with the name '1337/ci-tools'."}]}gh: Could not resolve to a Repository with the name '1337/ci-tools'.
+exit=1
+
+== the required-set query against the real incident PR, gkalyan/ue-frontend#2 ==
+[{"isRequired":false,"name":"advisory (non-blocking): lint, lint:types, lint:status-labels, test:process-flow"},{"isRequired":false,"name":"advisory (non-blocking): build"},{"isRequired":false,"name":"type-check"},{"isRequired":false,"name":"lint:blueprint"},{"isRequired":false,"name":"quality-ratchet"}]
+
+== the script's own --jq program, run on that live answer ==
+oid=ca692958293a154c3232ed0d76cf6160fafdae9f
+more=false
+(no required= lines: github reports ue-frontend main declares no required check,
+ so the guard takes the 'none' path and keeps judging every check)
+
+== for contrast, gh's canned rollup read reports isRequired null ==
+[{"isRequired":null,"name":"advisory (non-blocking): lint, lint:types, lint:status-labels, test:process-flow"},{"isRequired":null,"name":"advisory (non-blocking): build"},{"isRequired":null,"name":"type-check"},{"isRequired":null,"name":"lint:blueprint"},{"isRequired":null,"name":"quality-ratchet"}]
+
+== fm-pr-merge.sh driven over the real forge answer for gkalyan/ue-frontend#2 ==
+   (live rollup + live required-set read from github.com; only pr merge is stubbed)
+--- exit: 1
+--- stderr:
+error: refusing to merge https://github.com/gkalyan/ue-frontend/pull/2
+  - check 'advisory (non-blocking): build' is not green
+  - check 'advisory (non-blocking): lint, lint:types, lint:status-labels, test:process-flow' is not green
+error: these checks are not green: advisory (non-blocking): build, advisory (non-blocking): lint, lint:types, lint:status-labels, test:process-flow
+--- gh calls:
+api graphql -f query=query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(nu
