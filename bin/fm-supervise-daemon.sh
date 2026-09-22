@@ -924,9 +924,23 @@ wedge_alarm_emit() {  # <channel> <summary>
 # `off` directive disables the alert, regardless of position; an unresolvable
 # `auto` (no OS channel on this platform) logs that the durable marker is the
 # only signal. Every notifier routes through the test-forced recorder seam.
+#
+# `auto`/`default` ALSO fires `herdr` when the supervised pane's own backend
+# is herdr (task fm-afk-inject-wedged-claude-herdr): the platform OS channel
+# (osascript on macOS) is a Notification Center banner the captain's own
+# Focus/Do Not Disturb posture can suppress with no failure signal - exit 0,
+# nothing logged, nothing to distinguish it from a banner the captain actually
+# saw. That is exactly what left 90 successive alarm cycles unable to prove
+# anything reached the captain overnight. herdr is guaranteed present whenever
+# it is the supervised backend, and its own notification surface does not run
+# through this Mac's OS-level suppression, so it is a structurally
+# independent second channel added for free rather than a stronger proof of
+# arrival - proving a human actually saw either channel remains open work
+# (see the task's report). An explicit `herdr` directive elsewhere in the
+# configured list is de-duplicated so it never fires twice in one cycle.
 wedge_alarm_notify() {  # <summary> <marker>
-  local summary=$1 marker=$2 ch
-  local -a channels=()
+  local summary=$1 marker=$2 ch resolved backend
+  local -a channels=() resolved_channels=() fired=()
   while IFS= read -r ch; do
     [ -n "$ch" ] || continue
     channels+=("$ch")
@@ -934,8 +948,20 @@ wedge_alarm_notify() {  # <summary> <marker>
   for ch in "${channels[@]}"; do
     [ "$ch" = off ] && return 0
   done
+  backend="${FM_SUPERVISOR_BACKEND:-$FM_SUPERVISOR_BACKEND_DEFAULT}"
   for ch in "${channels[@]}"; do
-    case "$ch" in auto|default) ch=$(wedge_alarm_platform_default) ;; esac
+    case "$ch" in
+      auto|default)
+        resolved=$(wedge_alarm_platform_default)
+        [ -n "$resolved" ] && resolved_channels+=("$resolved")
+        [ "$backend" = herdr ] && resolved_channels+=(herdr)
+        ;;
+      *) resolved_channels+=("$ch") ;;
+    esac
+  done
+  for ch in "${resolved_channels[@]:-}"; do
+    case " ${fired[*]-} " in *" $ch "*) continue ;; esac
+    fired+=("$ch")
     case "$ch" in
       '') log "wedge alarm: no OS-level alert channel on $(uname); durable marker $marker is the only signal - set config/wedge-alarm (e.g. a command: directive)" ;;
       osascript|herdr) wedge_alarm_emit "$ch" "$summary" || true ;;

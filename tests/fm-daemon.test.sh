@@ -2367,6 +2367,48 @@ test_wedge_alarm_auto_non_darwin_has_no_os_channel() {
   pass "auto on a non-macOS platform selects no built-in OS channel (the marker or a configured command carries it)"
 }
 
+# task fm-afk-inject-wedged-claude-herdr: 90 successive overnight alarm cycles
+# each resolved `auto` to osascript alone and each exited 0, with no signal
+# distinguishing "the captain's own Focus/Do Not Disturb posture silently
+# swallowed the banner" from "the captain saw it". herdr is guaranteed present
+# on a herdr-supervised pane and its notification surface does not run
+# through this Mac's OS-level suppression, so `auto` now also fires it as a
+# second, structurally independent channel on that backend.
+test_wedge_alarm_auto_herdr_backend_also_fires_herdr() {
+  local dir log
+  dir=$(make_wedge_case wedge-auto-herdr-backend); log="$dir/alert.log"
+  PATH="$dir/fakebin:$PATH" FM_WEDGE_ALARM_LOG="$log" FM_FAKE_UNAME=Darwin \
+    FM_SUPERVISOR_BACKEND=herdr FM_WEDGE_ALARM_CHANNEL=auto \
+    wedge_alarm_notify "away-mode WEDGED 900s" "/s/.marker"
+  grep -F "$(printf 'osascript\t')" "$log" >/dev/null \
+    || fail "auto on a herdr-supervised pane must still fire the platform default (osascript): $(cat "$log")"
+  grep -F "$(printf 'herdr\t')" "$log" >/dev/null \
+    || fail "auto on a herdr-supervised pane must also fire herdr as an independent channel: $(cat "$log")"
+  pass "auto on a herdr-supervised pane fires both osascript and herdr, not osascript alone"
+}
+
+test_wedge_alarm_auto_non_herdr_backend_stays_osascript_only() {
+  local dir log
+  dir=$(make_wedge_case wedge-auto-tmux-backend); log="$dir/alert.log"
+  PATH="$dir/fakebin:$PATH" FM_WEDGE_ALARM_LOG="$log" FM_FAKE_UNAME=Darwin \
+    FM_SUPERVISOR_BACKEND=tmux FM_WEDGE_ALARM_CHANNEL=auto \
+    wedge_alarm_notify "away-mode WEDGED 900s" "/s/.marker"
+  grep -F "$(printf 'osascript\t')" "$log" >/dev/null || fail "auto did not resolve to osascript on a tmux-supervised pane: $(cat "$log")"
+  grep -F "$(printf 'herdr\t')" "$log" >/dev/null && fail "a tmux-supervised pane must not also fire herdr: $(cat "$log")"
+  pass "auto on a non-herdr-supervised pane still fires osascript alone"
+}
+
+test_wedge_alarm_auto_herdr_backend_dedupes_explicit_herdr_directive() {
+  local dir log count
+  dir=$(make_wedge_case wedge-auto-herdr-dedupe); log="$dir/alert.log"
+  PATH="$dir/fakebin:$PATH" FM_WEDGE_ALARM_LOG="$log" FM_FAKE_UNAME=Darwin \
+    FM_SUPERVISOR_BACKEND=herdr FM_WEDGE_ALARM_CHANNEL=$'auto\nherdr' \
+    wedge_alarm_notify "away-mode WEDGED 900s" "/s/.marker"
+  count=$(grep -cF "$(printf 'herdr\t')" "$log")
+  [ "$count" -eq 1 ] || fail "an explicit herdr directive alongside auto's own herdr addition must fire herdr exactly once, fired $count times: $(cat "$log")"
+  pass "an explicit herdr directive never duplicates auto's own herdr addition on a herdr-supervised pane"
+}
+
 test_wedge_alarm_config_file_multi_channel() {
   local dir cfgdir log
   dir=$(make_wedge_case wedge-config); log="$dir/alert.log"
@@ -2884,6 +2926,9 @@ test_wedge_alarm_unknown_channel_hides_configured_directive
 test_wedge_alarm_off_disables_active_alert_regardless_of_position
 test_wedge_alarm_auto_darwin_selects_osascript
 test_wedge_alarm_auto_non_darwin_has_no_os_channel
+test_wedge_alarm_auto_herdr_backend_also_fires_herdr
+test_wedge_alarm_auto_non_herdr_backend_stays_osascript_only
+test_wedge_alarm_auto_herdr_backend_dedupes_explicit_herdr_directive
 test_wedge_alarm_config_file_multi_channel
 test_wedge_alarm_failing_channel_degrades_gracefully
 test_wedge_alarm_hung_channel_times_out_and_falls_through

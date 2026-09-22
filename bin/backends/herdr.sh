@@ -3052,6 +3052,26 @@ fm_backend_herdr_composer_identity() {  # <target> -> "<agent>\t<status>"
   fm_backend_herdr_agent_identity_raw "$FM_BACKEND_HERDR_SESSION" "$FM_BACKEND_HERDR_PANE"
 }
 
+# fm_backend_herdr_composer_capture_lines: the row bound herdr's OWN composer
+# capture requests, deliberately larger than the fleet-wide
+# FM_COMPOSER_CAPTURE_LINES (bin/fm-composer-lib.sh, 20 - sized for a
+# single-row composer, not a wrapped one). A composer holding real wrapped
+# text (a long typed line, or a stuck unsubmitted injection) can grow taller
+# than 20 rows, and trimming to that shared bound here would keep the
+# composer's CLOSING separator/edge row while silently dropping its OPENING
+# one - a screen with an unpaired trailing separator and no visible glyph,
+# which the shared classifier's cursorless staleness rule (designed to catch
+# a genuinely stale candidate below a live pair) reads as `unknown` instead of
+# the real `pending` it is (task fm-afk-inject-wedged-claude-herdr: a stuck,
+# never-submitted multi-line escalation read this way for 7.6 hours).
+# herdr's own `pane read --lines N` already clamps to the pane's real current
+# screen height (verified herdr 0.9.0; the small-N-returns-empty quirk this
+# adapter's fetch floor above works around no longer applies at N this
+# large), so requesting a bound this generous never pulls more than the pane
+# actually shows - it only stops this adapter from discarding, locally, what
+# herdr already returned.
+FM_BACKEND_HERDR_COMPOSER_CAPTURE_LINES=${FM_BACKEND_HERDR_COMPOSER_CAPTURE_LINES:-500}
+
 # fm_backend_herdr_composer_state: thin adapter - capture plus capabilities
 # in, shared verdict out. The ANSI capture is preferred (styled=1 lets the
 # shared classifier strip ghost/placeholder text); when it fails on an older
@@ -3061,12 +3081,12 @@ fm_backend_herdr_composer_identity() {  # <target> -> "<agent>\t<status>"
 # pair below every other candidate), preserving this adapter's original
 # consult-only-when-needed behavior.
 fm_backend_herdr_composer_state() {  # <target> -> empty|pending|pending-unproven|unknown
-  local target=$1 cap caps verdict identity
+  local target=$1 cap caps verdict identity lines=$FM_BACKEND_HERDR_COMPOSER_CAPTURE_LINES
   fm_backend_herdr_parse_target "$target" || { printf 'unknown'; return 0; }
-  if cap=$(fm_backend_herdr_capture_ansi "$target" "$FM_COMPOSER_CAPTURE_LINES" 2>/dev/null); then
-    caps=$(printf 'styled=1\ncursor=0\nidentity=1\nrows=%s' "$FM_COMPOSER_CAPTURE_LINES")
-  elif cap=$(fm_backend_herdr_capture "$target" "$FM_COMPOSER_CAPTURE_LINES"); then
-    caps=$(printf 'styled=0\ncursor=0\nidentity=1\nrows=%s' "$FM_COMPOSER_CAPTURE_LINES")
+  if cap=$(fm_backend_herdr_capture_ansi "$target" "$lines" 2>/dev/null); then
+    caps=$(printf 'styled=1\ncursor=0\nidentity=1\nrows=%s' "$lines")
+  elif cap=$(fm_backend_herdr_capture "$target" "$lines"); then
+    caps=$(printf 'styled=0\ncursor=0\nidentity=1\nrows=%s' "$lines")
   else
     printf 'unknown'
     return 0

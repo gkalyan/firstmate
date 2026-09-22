@@ -583,6 +583,39 @@ tests/fm-composer-codex-idle-live-e2e.test.sh
 The verification machine runs its fleet on Herdr and has no tmux installed, so on 2026-09-15 that guard reported `skip: live: tmux absent` there, and the Herdr capture above is this entry's live evidence.
 The guard also notes whether the starfield and the placeholder were actually drawn during its read, because codex need not animate them under every model or mode; a refresh on a tmux host should record that note beside the verdict rather than assume the starfield was exercised.
 
+### 2026-09-22 real claude 2.1.278 composer wrapped taller than the shared capture bound through Herdr
+
+Verified on 2026-09-22 on macOS arm64 (Darwin 26.5.2) against real Claude Code 2.1.278 (Opus 5, high effort) running in an isolated Herdr 0.9.0 lab session (`bin/fm-herdr-lab.sh`), read through `fm_backend_herdr_composer_state` exactly as `bin/fm-supervise-daemon.sh` calls it in production (task fm-afk-inject-wedged-claude-herdr).
+
+Idle, real Claude on Herdr draws its composer as a bare `❯` between two solid horizontal rules (the same structural shape `bin/fm-composer-lib.sh` calls "separated", previously verified only for Pi), with a footer of a transcript-saving warning, a model/workspace bar, and an auto-mode line beneath the closing rule.
+Typing a real, unsubmitted message that is long enough to wrap onto roughly 15 or more terminal rows (confirmed live at up to 15 literal wrapped rows before Claude's own paste-detection heuristic started collapsing further growth into `[Pasted text #N]` placeholders) keeps growing the composer downward inside the pane's own 40-row viewport, which the shared 20-row `FM_COMPOSER_CAPTURE_LINES` tail (`bin/fm-composer-lib.sh`) is not tall enough to hold in full once real logged escalation traffic pushes the pane past a fresh, short session.
+
+A direct byte-exact reconstruction proves the mechanism without depending on hitting that exact live line count.
+The adapter's own local `tail -n "$lines"` re-trim, not the shared classifier, was the fault: `fm_backend_herdr_capture`/`fm_backend_herdr_capture_ansi` already fetch a generous floor from Herdr (working around Herdr's old small-N-returns-empty quirk, itself no longer reproducible on Herdr 0.9.0 - verified live, `pane read --lines 200` on a 40-row pane returns the pane's real 39-40 rows, not an error and not empty), then discarded everything but the caller's small requested window before the classifier ever saw it.
+Feeding `fm_composer_classify_screen` the SAME fixture once trimmed to that old 20-row window (opening rule and `❯` glyph scrolled out, closing rule and non-blank wrapped content left in) and once kept whole (the pre-fix and post-fix adapter behavior, respectively) diverges exactly there:
+
+```sh
+bash -c '. bin/fm-composer-lib.sh
+  content=$(printf "  word word word\n%.0s" {1..15})
+  trimmed=$(printf "%s" "$content"; printf "───────────────\n  Opus 4.8 (1M context)   ▍   3%%\n  auto mode on\n")
+  whole=$(printf "───────────────\n\xe2\x9d\xaf word word word\n%s" "$content"; printf "───────────────\n  Opus 4.8 (1M context)   ▍   3%%\n  auto mode on\n")
+  fm_composer_classify_screen "$(printf "styled=1\ncursor=0\nidentity=1\nrows=20")" "$trimmed"; echo
+  fm_composer_classify_screen "$(printf "styled=1\ncursor=0\nidentity=1\nrows=21")" "$whole"; echo'
+```
+
+Observed output - the pre-fix adapter's trimmed capture, then the post-fix adapter's full one:
+
+```text
+unknown
+pending
+```
+
+With the opening rule and glyph trimmed away, the classifier's cursorless "unpaired trailing separator" staleness rule (designed to invalidate a genuinely stale earlier candidate sitting below a live separator pair) fired on the only rule left in view and returned `unknown` for content that was genuinely `pending`.
+This is the shape behind the task's 1,909 identical overnight deferrals: the away-mode daemon's own first failed injection left a real, never-resubmitted escalation digest sitting in the composer, and the SAME misread of that unchanged, wrapped content repeated on every subsequent guard check until the captain returned.
+
+`test_composer_state_claude_wrapped_composer_taller_than_shared_capture_bound_is_pending` in `tests/fm-backend-herdr.test.sh` carries this fixture through the real fake-CLI adapter call (not just the classifier directly), asserting both the pre-fix regression (by trimming the same fixture to the old 20-line bound and reproducing `unknown`, so the case cannot go quietly vacuous) and the fixed adapter's `pending`.
+No dedicated live-harness-optin guard was added for this entry: the fix widens an already-verified adapter capture window rather than teaching the shared classifier a new vendor shape, so the fake-CLI unit test's byte-exact fixture (built from the real capture above) carries the regression coverage, and this dated entry is the live evidence trail.
+
 ## Steering-inbox doorbell
 
 The steering channel's one behavioral assumption - a real worker agent follows the constant self-describing doorbell line (list the inbox, read and act on its records in numeric order, then `mv` each into `handled/`) - was verified on 2026-08-23 against every installed verified harness, on tmux 3.6a, macOS arm64, on an isolated private socket, driving the REAL `bin/fm-send.sh` end to end (durable record plus doorbell, with one mid-wait re-ring playing the watcher's role).

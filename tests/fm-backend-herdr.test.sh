@@ -4030,6 +4030,54 @@ test_composer_state_claude_dim_ghost_row_with_real_text_is_pending() {
   pass "fm_backend_herdr_composer_state: real typed text on the same claude prompt row still reads pending"
 }
 
+# THE 7.6-HOUR WEDGE regression (task fm-afk-inject-wedged-claude-herdr).
+# Night of 2026-09-21/22: bin/fm-afk-start.sh's away-mode daemon typed one
+# long escalation digest into the captain's real claude-on-herdr composer and
+# never got the Enter confirmed, leaving that stuck, never-resubmitted text
+# sitting there. The digest wrapped across more rows than the shared
+# FM_COMPOSER_CAPTURE_LINES bound (bin/fm-composer-lib.sh, 20 - sized for a
+# single-row composer), and trimming the capture to that bound kept the
+# composer's CLOSING rule while dropping its OPENING rule and "\xe2\x9d\xaf"
+# glyph along with it: an unpaired trailing separator over real, non-blank
+# content with no glyph anywhere in view, which fm_composer_classify_screen's
+# cursorless staleness rule (designed to catch a genuinely stale candidate
+# below a live separator pair) reads as `unknown` rather than the real
+# `pending` it is. Every later guard check saw the SAME unchanged stuck text
+# and deferred the SAME way: 1,909 identical "composer not confirmed-empty"
+# lines over 7.6 hours, because the daemon never re-attempts a send once the
+# guard has read anything but an affirmative `empty`.
+test_composer_state_claude_wrapped_composer_taller_than_shared_capture_bound_is_pending() {
+  local dir log resp fb out i trimmed pretrim_out
+  dir="$TMP_ROOT/composer-claude-wrapped-taller-than-bound"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  {
+    printf '\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\n'
+    printf '\xe2\x9d\xaf stuck unsubmitted escalation digest, wrapped row 1\n'
+    for i in $(seq 2 20); do
+      printf '  stuck unsubmitted escalation digest, wrapped row %s\n' "$i"
+    done
+    printf '\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\n'
+    printf '  Opus 4.8 (1M context)   \xe2\x96\x8d               3%%\n'
+    printf '  \xe2\x86\x90 for agents\n'
+  } > "$resp/1.out"
+  fb=$(make_herdr_fakebin "$dir")
+
+  # Non-vacuousness: prove the fixture really drives the two signals apart.
+  # Trimming it to the shared 20-line bound the way the pre-fix adapter did
+  # must lose the opening rule and glyph and reproduce the regression exactly.
+  trimmed=$(tail -n 20 "$resp/1.out")
+  pretrim_out=$(bash -c '. "$0/bin/fm-composer-lib.sh"; fm_composer_classify_screen "$1" "$2"' \
+    "$ROOT" "$(printf 'styled=1\ncursor=0\nidentity=1\nrows=20')" "$trimmed")
+  [ "$pretrim_out" = unknown ] \
+    || fail "non-vacuousness: trimming this fixture to the old shared 20-line bound must reproduce the regression (unknown), got '$pretrim_out' - the fixture no longer drives the two signals apart"
+
+  # The real call: the adapter must request enough rows that the composer's
+  # own opening rule survives, and read the genuinely pending text.
+  out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_composer_state default:w1:p2' "$ROOT" )
+  [ "$out" = pending ] || fail "a real claude composer wrapped past the shared 20-line capture bound must still read pending, got '$out'"
+  pass "fm_backend_herdr_composer_state: a composer wrapped taller than the shared capture bound still reads pending, not unknown"
+}
+
 # grok's TRUECOLOR placeholder gap (harness-adapters "Known gap"), now covered by
 # the same owner. grok renders its composer inside a bordered box whose border
 # and placeholder/hint text use a dark, muted truecolor foreground (verified live
@@ -5359,6 +5407,7 @@ test_composer_state_claude_unbordered_prompt_is_pending
 test_composer_state_bare_prompt_below_stale_bordered_banner_wins
 test_composer_state_claude_dim_prompt_suggestion_ghost_is_empty
 test_composer_state_claude_dim_ghost_row_with_real_text_is_pending
+test_composer_state_claude_wrapped_composer_taller_than_shared_capture_bound_is_pending
 test_composer_state_grok_dark_truecolor_placeholder_is_empty
 test_composer_state_grok_bright_truecolor_real_text_is_pending
 test_composer_state_codex_bare_prompt_glyph_is_empty

@@ -12,8 +12,10 @@ It lists channel directives, one per non-empty, non-comment line, and every list
 `FM_WEDGE_ALARM_CHANNEL` overrides the file with one directive for focused testing.
 
 - `off` disables every active alert while retaining the durable marker and tmux flash.
-- `auto` or `default` resolves to `osascript` on macOS.
+- `auto` or `default` resolves to `osascript` on macOS, and ALSO fires `herdr` when the supervised pane's own backend is herdr.
+  herdr is guaranteed present on that path and its notification surface does not run through this Mac's OS-level Focus/Do Not Disturb suppression, so it is a structurally independent second channel rather than a stronger proof any channel was actually seen.
   Other platforms have no built-in OS channel, so configure `command:` when a durable marker alone is insufficient.
+  An explicit `herdr` directive elsewhere in the configured list is de-duplicated so it never fires twice in one cycle.
 - `osascript` posts a macOS Notification Center banner outside the terminal pane.
 - `herdr` calls `herdr notification show` outside the supervised pane.
 - `command:<cmd>` runs `<cmd>` through `sh -c` with the alarm summary as `$1` and on stdin, allowing delivery to a phone or pager service.
