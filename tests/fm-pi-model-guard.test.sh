@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Portable regression for bin/fm-spawn.sh's pi_model_validate: the pre-launch
-# guard that refuses a Pi or pi-signed launch unless --model resolves to
-# exactly one Anthropic-provider row in the selected executable's own
-# `--list-models` catalog.
+# guard that refuses a Pi or pi-signed launch unless --model matches exactly
+# one row, by bare id or exact provider/id, in the selected executable's own
+# `--list-models` catalog, which lists only credentialed providers.
 #
 # Why this exists: on 2026-09-25, `--model sonnet` resolved through Pi's own
 # alias resolver to Amazon Bedrock's `us.anthropic.claude-sonnet-5`, which had
@@ -14,10 +14,7 @@
 # both without objection.
 #
 # This suite pins the guard's LOGIC with a fake pi/pi-signed binary so CI
-# needs no installed Pi; tests/fm-pi-model-guard-live-e2e.test.sh is the
-# default-on live guard that proves the same refusal against the REAL
-# installed Pi catalog on this machine, per firstmate-coding-guidelines'
-# harness-dependent-check rule.
+# needs no installed Pi.
 set -u
 
 # shellcheck source=tests/fixtures.sh
@@ -26,10 +23,10 @@ set -u
 TMP_ROOT=$(fm_test_tmproot fm-pi-model-guard)
 
 # A fake pi/pi-signed that answers --help (for the --tui-mode probe) and
-# --list-models with a fixed Anthropic-only catalog matching the real
-# installed catalog's shape on 2026-09-25 and today (no Bedrock row, because
-# this machine's pi has no Bedrock credentials - see the pi harness reference
-# for the empirical check). --list-models exits nonzero when
+# --list-models with a fixed catalog matching the real installed catalog's
+# shape (no Bedrock row, because an uncredentialed provider is never listed -
+# see the pi harness reference for the empirical check). FM_FAKE_PI_EXTRA_ROW
+# appends one more row. --list-models exits nonzero when
 # FM_FAKE_PI_LIST_STATUS is set, to pin the unreadable-catalog case.
 make_fake_pi() {  # <fakebin> <tool>
   local fakebin=$1 tool=$2
@@ -46,7 +43,9 @@ case "${1:-}" in
     'provider   model                       context  max-out  thinking  images' \
     'anthropic  claude-opus-5               1M       128K     yes       yes   ' \
     'anthropic  claude-opus-5-5             1M       128K     yes       yes   ' \
-    'anthropic  claude-sonnet-5             1M       128K     yes       yes   '
+    'anthropic  claude-sonnet-5             1M       128K     yes       yes   ' \
+    'openai-codex  gpt-5.6-sol              400K     128K     yes       yes   '
+  [ -z "${FM_FAKE_PI_EXTRA_ROW:-}" ] || printf '%s\n' "$FM_FAKE_PI_EXTRA_ROW"
   ;;
 esac
 exit 0
@@ -85,7 +84,7 @@ test_refuses_bare_alias_and_claude_code_suffix() {
   status=$?
   expect_code 1 "$status" "bare alias 'sonnet' must be refused: $out"
   assert_contains "$out" "Pi model 'sonnet' matches no entry" "refusal did not name the alias as unmatched"
-  assert_contains "$out" "claude-sonnet-5" "refusal did not name a satisfying Anthropic id"
+  assert_contains "$out" "anthropic/claude-sonnet-5" "refusal did not name a satisfying exact provider/id"
   [ ! -e "$home/state/$id.meta" ] || fail "refused alias still published task metadata"
   [ ! -s "$launchlog" ] || fail "refused alias still launched a worker"
 
@@ -100,15 +99,46 @@ test_refuses_bare_alias_and_claude_code_suffix() {
   pass "fm-spawn: pi_model_validate refuses a bare alias and a Claude Code model suffix"
 }
 
-test_refuses_other_provider() {
-  local home proj wt fakebin launchlog out status id=guard-other-provider
+test_accepts_listed_non_anthropic_provider() {
+  local home proj wt fakebin launchlog out id=guard-other-provider
   IFS='|' read -r home proj wt fakebin launchlog < <(make_case other-provider pi "$id")
   out=$(run_scout_spawn "$home" "$wt" "$fakebin" "$launchlog" "$id" "$proj" \
+    --harness pi --model openai-codex/gpt-5.6-sol 2>&1)
+  expect_code 0 "$?" "a listed non-Anthropic provider/id must be accepted: $out"
+  assert_grep "model=openai-codex/gpt-5.6-sol" "$home/state/$id.meta" "meta missing the accepted model"
+  assert_contains "$(cat "$launchlog")" "--model 'openai-codex/gpt-5.6-sol'" "accepted model did not reach the launch line"
+  pass "fm-spawn: pi_model_validate accepts a listed non-Anthropic provider/id"
+}
+
+test_refuses_unlisted_provider_id() {
+  local home proj wt fakebin launchlog out id=guard-unlisted-provider
+  IFS='|' read -r home proj wt fakebin launchlog < <(make_case unlisted-provider pi "$id")
+  out=$(run_scout_spawn "$home" "$wt" "$fakebin" "$launchlog" "$id" "$proj" \
     --harness pi --model amazon-bedrock/us.anthropic.claude-sonnet-5 2>&1)
-  expect_code 1 "$?" "an explicit non-Anthropic provider/id must be refused: $out"
+  expect_code 1 "$?" "an unlisted provider/id must be refused: $out"
   assert_contains "$out" "matches no entry" "refusal did not name the unlisted provider/id as unmatched"
   [ ! -e "$home/state/$id.meta" ] || fail "refused provider still published task metadata"
-  pass "fm-spawn: pi_model_validate refuses an explicit match on a non-Anthropic provider"
+  [ ! -s "$launchlog" ] || fail "refused provider still launched a worker"
+  pass "fm-spawn: pi_model_validate refuses an unlisted provider/id"
+}
+
+test_ambiguous_bare_id_suggests_accepted_selector() {
+  local home proj wt fakebin launchlog out id
+  id=guard-ambiguous
+  IFS='|' read -r home proj wt fakebin launchlog < <(make_case ambiguous pi "$id")
+  out=$(FM_FAKE_PI_EXTRA_ROW='github-copilot  claude-sonnet-5  200K  64K  yes  yes' \
+    run_scout_spawn "$home" "$wt" "$fakebin" "$launchlog" "$id" "$proj" --harness pi --model claude-sonnet-5 2>&1)
+  expect_code 1 "$?" "a bare id listed by two providers must be refused: $out"
+  assert_contains "$out" "matches more than one catalog entry" "refusal did not name the ambiguity"
+  assert_contains "$out" "anthropic/claude-sonnet-5" "refusal did not suggest an exact provider/id"
+  [ ! -s "$launchlog" ] || fail "ambiguous model still launched a worker"
+
+  id=guard-ambiguous-retry
+  IFS='|' read -r home proj wt fakebin launchlog < <(make_case ambiguous-retry pi "$id")
+  out=$(FM_FAKE_PI_EXTRA_ROW='github-copilot  claude-sonnet-5  200K  64K  yes  yes' \
+    run_scout_spawn "$home" "$wt" "$fakebin" "$launchlog" "$id" "$proj" --harness pi --model anthropic/claude-sonnet-5 2>&1)
+  expect_code 0 "$?" "retrying with the suggested provider/id must be accepted: $out"
+  pass "fm-spawn: pi_model_validate refuses an ambiguous bare id and its suggestion is accepted"
 }
 
 test_accepts_exact_anthropic_ids() {
@@ -148,8 +178,8 @@ test_exempts_codex_native_ultra_pathway() {
   # codex-native/<id> is the installed pi-codex-native extension's own
   # runtime-registered provider (bin/fm-harness.sh's validate_native_effort),
   # never a row Pi's own --list-models can print. It is out of scope for the
-  # Anthropic-provider guard because it is a separately gated, explicitly
-  # typed pathway rather than anything Pi's alias resolver could reach.
+  # catalog guard because it is a separately gated, explicitly typed pathway
+  # rather than anything Pi's fuzzy matcher could reach.
   local home proj wt fakebin launchlog out status id=guard-codex-native
   IFS='|' read -r home proj wt fakebin launchlog < <(make_case codex-native pi "$id")
   out=$(run_scout_spawn "$home" "$wt" "$fakebin" "$launchlog" "$id" "$proj" \
@@ -160,7 +190,9 @@ test_exempts_codex_native_ultra_pathway() {
 }
 
 test_refuses_bare_alias_and_claude_code_suffix
-test_refuses_other_provider
+test_accepts_listed_non_anthropic_provider
+test_refuses_unlisted_provider_id
+test_ambiguous_bare_id_suggests_accepted_selector
 test_accepts_exact_anthropic_ids
 test_refuses_unreadable_catalog
 test_exempts_codex_native_ultra_pathway
