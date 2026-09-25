@@ -1,0 +1,11 @@
+$ pi --model sonnet -p "reply ok"
+No API key found for amazon-bedrock.
+
+Use /login to log into a provider via OAuth or API key. See:
+  /opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent/docs/providers.md
+  /opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent/docs/models.md
+exit=
+
+$ pi --model 'claude-opus-5[1m]' -p 'reply ok'
+Error: Model "claude-opus-5[1m]" not found. Use --list-models to see available models.
+exit=

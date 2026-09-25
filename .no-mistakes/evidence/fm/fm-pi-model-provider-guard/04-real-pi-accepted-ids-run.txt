@@ -1,0 +1,6 @@
+$ pi --model claude-sonnet-5 -p 'reply with exactly: ok'
+ok
+
+$ pi --model anthropic/claude-sonnet-5 -p 'reply with exactly: ok'
+ok
+
