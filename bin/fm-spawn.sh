@@ -1577,6 +1577,63 @@ pi_supports_tui_mode() {
   printf '%s\n' "$help" | grep -Eq -- '(^|[[:space:]])--tui-mode([[:space:]=]|$)'
 }
 
+# Pi/pi-signed pre-launch model validation. `<pi-bin> --list-models` (Pi 0.87.1)
+# prints one table row per catalog model, header "provider   model ...", for
+# whatever providers currently HAVE credentials on this machine - verified
+# empirically here and matching the 2026-09-25 incident (Amazon Bedrock was
+# absent from the listing on that machine that same day even though Pi's own
+# alias resolver still routed the bare `sonnet` alias to Bedrock's
+# `us.anthropic.claude-sonnet-5` and hung three workers on a missing
+# credential). Because the catalog can neither list nor rule out a provider
+# Pi's resolver might still reach, refusal is scoped tightly: a model is
+# accepted only when it matches exactly one listed row, by bare id or exact
+# "provider/id", and that row's provider is anthropic. A bare or fuzzy alias
+# (sonnet), a Claude Code suffix ([1m]), an unlisted id, an ambiguous match,
+# and a match on any other listed provider are all refused with the concrete
+# Anthropic ids that would work. Unlike omp/agy's pass-through-unvalidated on
+# an unreadable listing, an unreadable Pi catalog is refused outright: this is
+# exactly the failure this guard exists to close, and there is no signal left
+# to fall back to that would not repeat the incident.
+#
+# codex-native/<id> is the one deliberate exception: it names the installed
+# pi-codex-native extension's runtime-registered provider (never a row Pi's
+# own --list-models can print), and bin/fm-harness.sh's validate_native_effort
+# already requires that exact prefixed form plus --effort ultra before it is
+# accepted anywhere, so it is a separately gated, explicitly-typed pathway
+# rather than anything Pi's bare-alias resolver could reach by accident.
+pi_model_validate() { # <pi-bin> <model>
+  local bin=$1 model=$2 listing rows matches count provider_matches anthropic_ids
+  [ -n "$model" ] && [ "$model" != default ] || return 0
+  case "$model" in codex-native/?*) return 0 ;; esac
+  listing=$("$bin" --list-models 2>/dev/null) || {
+    echo "error: '$bin --list-models' could not be read; cannot confirm Pi model '$model' resolves to Anthropic, so refusing rather than launching against an unconfirmed provider" >&2
+    return 1
+  }
+  rows=$(printf '%s\n' "$listing" | tail -n +2 | awk 'NF>=2 {print $1, $2}')
+  if [ -z "$rows" ]; then
+    echo "error: '$bin --list-models' listed no models; cannot confirm Pi model '$model' resolves to Anthropic, so refusing rather than launching against an unconfirmed provider" >&2
+    return 1
+  fi
+  anthropic_ids=$(printf '%s\n' "$rows" | awk '$1 == "anthropic" {print $2}' | sort -u | tr '\n' ' ')
+  anthropic_ids=${anthropic_ids% }
+  matches=$(printf '%s\n' "$rows" | awk -v m="$model" '$2 == m || ($1 "/" $2) == m {print $1, $2}')
+  count=$(printf '%s\n' "$matches" | grep -c .)
+  if [ "$count" -eq 0 ]; then
+    echo "error: Pi model '$model' matches no entry in '$bin --list-models'; use one of these Anthropic ids: ${anthropic_ids:-none listed}" >&2
+    return 1
+  fi
+  if [ "$count" -gt 1 ]; then
+    echo "error: Pi model '$model' matches more than one catalog entry (${matches//$'\n'/, }); use one of these Anthropic ids: ${anthropic_ids:-none listed}" >&2
+    return 1
+  fi
+  provider_matches=$(printf '%s\n' "$matches" | awk '{print $1}')
+  if [ "$provider_matches" != anthropic ]; then
+    echo "error: Pi model '$model' resolves to provider '$provider_matches', not Anthropic; use one of these Anthropic ids: ${anthropic_ids:-none listed}" >&2
+    return 1
+  fi
+  return 0
+}
+
 # omp pre-launch model validation. `omp models --json` (omp 18.1.11) prints
 # {"models":[{"provider","id","selector":"<provider>/<id>",...}]} for built-in and
 # auto-discovered providers only; it never lists a provider an extension
@@ -2020,6 +2077,9 @@ if [ "$HARNESS" = omp ]; then
 fi
 if [ "$HARNESS" = agy ]; then
   agy_model_validate "$AGY_BIN" "$MODEL" || exit 1
+fi
+if [ "$HARNESS" = pi ] || [ "$HARNESS" = pi-signed ]; then
+  pi_model_validate "$PI_BIN" "$MODEL" || exit 1
 fi
 
 secondmate_registry_value() {
