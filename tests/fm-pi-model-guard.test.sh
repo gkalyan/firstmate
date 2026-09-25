@@ -141,6 +141,25 @@ test_ambiguous_bare_id_suggests_accepted_selector() {
   pass "fm-spawn: pi_model_validate refuses an ambiguous bare id and its suggestion is accepted"
 }
 
+test_colliding_selector_is_never_suggested() {
+  local home proj wt fakebin launchlog out id
+  id=guard-collision
+  IFS='|' read -r home proj wt fakebin launchlog < <(make_case collision pi "$id")
+  out=$(FM_FAKE_PI_EXTRA_ROW='openrouter  anthropic/claude-sonnet-5  200K  64K  yes  yes' \
+    run_scout_spawn "$home" "$wt" "$fakebin" "$launchlog" "$id" "$proj" --harness pi --model sonnet 2>&1)
+  expect_code 1 "$?" "bare alias 'sonnet' must be refused: $out"
+  assert_not_contains "$out" " anthropic/claude-sonnet-5" "refusal offered a selector that is itself ambiguous"
+  assert_contains "$out" " anthropic/claude-opus-5" "refusal dropped an unambiguous selector"
+  assert_contains "$out" "openrouter/anthropic/claude-sonnet-5" "refusal dropped the unambiguous openrouter selector"
+
+  id=guard-collision-retry
+  IFS='|' read -r home proj wt fakebin launchlog < <(make_case collision-retry pi "$id")
+  out=$(FM_FAKE_PI_EXTRA_ROW='openrouter  anthropic/claude-sonnet-5  200K  64K  yes  yes' \
+    run_scout_spawn "$home" "$wt" "$fakebin" "$launchlog" "$id" "$proj" --harness pi --model openrouter/anthropic/claude-sonnet-5 2>&1)
+  expect_code 0 "$?" "a suggested unambiguous selector must be accepted: $out"
+  pass "fm-spawn: pi_model_validate never suggests a selector that collides with another row's bare id"
+}
+
 test_accepts_exact_anthropic_ids() {
   local home proj wt fakebin launchlog out status id
 
@@ -193,6 +212,7 @@ test_refuses_bare_alias_and_claude_code_suffix
 test_accepts_listed_non_anthropic_provider
 test_refuses_unlisted_provider_id
 test_ambiguous_bare_id_suggests_accepted_selector
+test_colliding_selector_is_never_suggested
 test_accepts_exact_anthropic_ids
 test_refuses_unreadable_catalog
 test_exempts_codex_native_ultra_pathway

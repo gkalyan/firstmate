@@ -1613,7 +1613,7 @@ pi_model_validate() { # <pi-bin> <model>
     echo "error: '$bin --list-models' listed no models; cannot confirm Pi model '$model' has a credentialed provider, so refusing rather than launching against an unconfirmed provider" >&2
     return 1
   fi
-  selectors=$(printf '%s\n' "$rows" | awk '{print $1 "/" $2}' | sort -u | tr '\n' ' ')
+  selectors=$(printf '%s\n' "$rows" | awk '{sel[NR] = $1 "/" $2; n[$1 "/" $2]++; n[$2]++} END {for (i = 1; i <= NR; i++) if (n[sel[i]] == 1) print sel[i]}' | sort -u | tr '\n' ' ')
   selectors=${selectors% }
   matches=$(printf '%s\n' "$rows" | awk -v m="$model" '$2 == m || ($1 "/" $2) == m {print $1 "/" $2}')
   count=$(printf '%s\n' "$matches" | grep -c .)
