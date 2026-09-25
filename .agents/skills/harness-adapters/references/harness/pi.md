@@ -14,6 +14,14 @@ Verified on 2026-07-27 with Pi and Pi-signed 0.82.0 unless a fact gives another 
 | Model flag | `--model <model>`. |
 | Effort flag | `--thinking <low\|medium\|high\|xhigh\|max>`; both identities expose the same levels and completed the same model-qualified max-thinking smoke. |
 | Model discovery | Run the selected executable as `<executable> --list-models [search]`; Pi's installed `docs/models.md` owns how built-in, extension-registered, and custom provider/model entries reach that list. |
+| Model discovery omits uncredentialed providers | Verified empirically on 2026-09-25 and again with Pi 0.87.1: `--list-models` lists only providers with usable credentials on the running machine. |
+
+Pi owns two different model-selection surfaces.
+Pi's installed `docs/models.md` says the `/model` picker shows models whose providers have usable authentication, and the empirical checks above show `--list-models` applies the same filter.
+Pi's installed `docs/cli.md` says `--model` does its own fuzzy ID/name match with no such filter, so a bare alias can resolve to a provider the listing omits.
+Amazon Bedrock was completely absent from the listing on 2026-09-25, yet `--model sonnet` still fuzzy-matched Bedrock's `us.anthropic.claude-sonnet-5` that day and hung three workers on a missing credential.
+`bin/fm-spawn.sh`'s `pi_model_validate` therefore refuses a Pi or pi-signed launch unless `--model` matches exactly one listed row, by bare id or exact `provider/id`, whatever its provider; that exact match is the credential check.
+`codex-native/<id>` is the one exempt pathway: the installed pi-codex-native extension's own runtime-registered provider, gated separately by `bin/fm-harness.sh`'s `validate_native_effort`, and never a `--list-models` row.
 
 Native Codex sessions may request `ultra` through the native extension flag described by `../../../bin/fm-spawn.sh`; it is separate from Pi's thinking levels.
 Pi has no permission system, so workers are always autonomous.

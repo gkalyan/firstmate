@@ -1577,6 +1577,57 @@ pi_supports_tui_mode() {
   printf '%s\n' "$help" | grep -Eq -- '(^|[[:space:]])--tui-mode([[:space:]=]|$)'
 }
 
+# Pi/pi-signed pre-launch model validation. `<pi-bin> --list-models` (Pi 0.87.1)
+# prints one table row per catalog model, header "provider   model ...", for
+# only the providers that currently HAVE usable credentials on this machine -
+# verified empirically here and matching the 2026-09-25 incident (Amazon
+# Bedrock was absent from the listing on that machine that same day, yet Pi's
+# own fuzzy `--model` matcher still routed the bare `sonnet` alias to Bedrock's
+# `us.anthropic.claude-sonnet-5` and hung three workers on a missing
+# credential). An exact match against that listing is therefore the credential
+# check: a model is accepted only when it matches exactly one listed row, by
+# bare id or exact "provider/id", whatever its provider. A bare or fuzzy alias
+# (sonnet), a Claude Code suffix ([1m]), an unlisted id, and an ambiguous match
+# are all refused with the exact "provider/id" selectors that would work.
+# Unlike omp/agy's pass-through-unvalidated on an unreadable listing, an
+# unreadable or empty Pi catalog is refused outright: this is exactly the
+# failure this guard exists to close, and there is no signal left to fall back
+# to that would not repeat the incident.
+#
+# codex-native/<id> is the one deliberate exception: it names the installed
+# pi-codex-native extension's runtime-registered provider (never a row Pi's
+# own --list-models can print), and bin/fm-harness.sh's validate_native_effort
+# already requires that exact prefixed form plus --effort ultra before it is
+# accepted anywhere, so it is a separately gated, explicitly-typed pathway
+# rather than anything Pi's fuzzy matcher could reach by accident.
+pi_model_validate() { # <pi-bin> <model>
+  local bin=$1 model=$2 listing rows matches count selectors
+  [ -n "$model" ] && [ "$model" != default ] || return 0
+  case "$model" in codex-native/?*) return 0 ;; esac
+  listing=$("$bin" --list-models 2>/dev/null) || {
+    echo "error: '$bin --list-models' could not be read; cannot confirm Pi model '$model' has a credentialed provider, so refusing rather than launching against an unconfirmed provider" >&2
+    return 1
+  }
+  rows=$(printf '%s\n' "$listing" | tail -n +2 | awk 'NF>=2 {print $1, $2}')
+  if [ -z "$rows" ]; then
+    echo "error: '$bin --list-models' listed no models; cannot confirm Pi model '$model' has a credentialed provider, so refusing rather than launching against an unconfirmed provider" >&2
+    return 1
+  fi
+  selectors=$(printf '%s\n' "$rows" | awk '{sel[NR] = $1 "/" $2; n[$1 "/" $2]++; n[$2]++} END {for (i = 1; i <= NR; i++) if (n[sel[i]] == 1) print sel[i]}' | sort -u | tr '\n' ' ')
+  selectors=${selectors% }
+  matches=$(printf '%s\n' "$rows" | awk -v m="$model" '$2 == m || ($1 "/" $2) == m {print $1 "/" $2}')
+  count=$(printf '%s\n' "$matches" | grep -c .)
+  if [ "$count" -eq 0 ]; then
+    echo "error: Pi model '$model' matches no entry in '$bin --list-models' (Pi would fuzzy-match it, possibly to an uncredentialed provider); use one of these exact ids: $selectors" >&2
+    return 1
+  fi
+  if [ "$count" -gt 1 ]; then
+    echo "error: Pi model '$model' matches more than one catalog entry (${matches//$'\n'/, }); use one of these exact ids: $selectors" >&2
+    return 1
+  fi
+  return 0
+}
+
 # omp pre-launch model validation. `omp models --json` (omp 18.1.11) prints
 # {"models":[{"provider","id","selector":"<provider>/<id>",...}]} for built-in and
 # auto-discovered providers only; it never lists a provider an extension
@@ -2020,6 +2071,9 @@ if [ "$HARNESS" = omp ]; then
 fi
 if [ "$HARNESS" = agy ]; then
   agy_model_validate "$AGY_BIN" "$MODEL" || exit 1
+fi
+if [ "$HARNESS" = pi ] || [ "$HARNESS" = pi-signed ]; then
+  pi_model_validate "$PI_BIN" "$MODEL" || exit 1
 fi
 
 secondmate_registry_value() {
