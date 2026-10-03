@@ -92,6 +92,15 @@ signed_in_claude_root() {
   printf '{}\n' > "$1/.credentials.json"
 }
 
+# unpinned_pi_lists_model <bare-model-id>: makes the ambient $HOME/.pi/agent
+# root's --list-models catalog list the given bare model id, for an unpinned
+# Pi spawn case where fm-spawn.sh's pi_model_validate reads that ambient root
+# directly (no config/pi-account pin exists to redirect the read).
+unpinned_pi_lists_model() {
+  mkdir -p "$HOME_DIR/user-home/.pi/agent"
+  printf 'openai-codex  %s  272K\n' "$1" > "$HOME_DIR/user-home/.pi/agent/listed"
+}
+
 # spawn_ship <id> [fm-spawn args...]: a ship spawn from HOME_DIR whose invoking
 # process carries an ambient signed-in Claude root and an ambient API key.
 spawn_ship() {
@@ -138,6 +147,7 @@ test_absent_pin_keeps_the_launch_unchanged() {
     "an unpinned launch must leave the pane's environment credentials alone"
 
   new_case absent-pi pi
+  unpinned_pi_lists_model gpt-5.5
   out=$(spawn_ship acct-absent-pi --model gpt-5.5); rc=$?
   expect_code 0 "$rc" "an unpinned Pi spawn with an unqualified model should succeed: $out"
   assert_not_contains "$(cat "$CASE/launch.log")" "--provider" "an unpinned Pi launch must not add a provider"
@@ -309,6 +319,7 @@ test_a_pin_governs_only_its_own_runner() {
   out=$(spawn_ship "$id-codex"); rc=$?
   expect_code 0 "$rc" "a codex spawn must ignore a Claude pin: $out"
   assert_not_contains "$out" "account=" "a codex spawn must not report a Claude pin"
+  unpinned_pi_lists_model gpt-5.5
   out=$(spawn_ship "$id-pi" --harness pi --model gpt-5.5); rc=$?
   expect_code 0 "$rc" "a Pi spawn must ignore a Claude pin: $out"
   assert_absent "$CASE/claude-checks" "no Claude sign-in check may run for another runner"

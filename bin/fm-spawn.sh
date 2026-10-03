@@ -2449,9 +2449,6 @@ fi
 if [ "$HARNESS" = agy ]; then
   agy_model_validate "$AGY_BIN" "$MODEL" || exit 1
 fi
-if [ "$HARNESS" = pi ] || [ "$HARNESS" = pi-signed ]; then
-  pi_model_validate "$PI_BIN" "$MODEL" || exit 1
-fi
 # Worker account pin (header above): resolved before any endpoint, worktree, or
 # record exists. An absent pin selects nothing and leaves every later launch
 # step exactly as it was. A pinned Claude root is exported here as well, so the
@@ -2469,6 +2466,15 @@ if [ -n "$WORKER_ACCOUNT" ] && [ "$HARNESS" = claude ]; then
   else
     unset CLAUDE_CONFIG_DIR
   fi
+fi
+# pi_model_validate (above) guards the ambient, unpinned launch root. A
+# config/pi-account pin already proved the model's declared provider is
+# listed under the pinned root through fm_worker_account_check's own sign-in
+# and --list-models fallback above, against the exact root the launch will
+# use (PI_CODING_AGENT_DIR is overridden to that root below); re-checking the
+# ambient root here would judge a catalog the pinned launch never reads from.
+if { [ "$HARNESS" = pi ] || [ "$HARNESS" = pi-signed ]; } && [ -z "$WORKER_ACCOUNT" ]; then
+  pi_model_validate "$PI_BIN" "$MODEL" || exit 1
 fi
 
 secondmate_registry_value() {
