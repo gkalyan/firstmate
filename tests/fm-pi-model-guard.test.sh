@@ -28,17 +28,18 @@ TMP_ROOT=$(fm_test_tmproot fm-pi-model-guard)
 # see the pi harness reference for the empirical check).
 #
 # Control flags live in FILES under <fakebin>, not environment variables: the
-# fix under test (bin/fm-spawn.sh's pi_model_validate) now runs "$bin"
-# --list-models through a clean env -i environment, same as every other test
-# double here invoked through it, so a control var set only in the test's own
-# shell would never reach the fake binary - files survive that sandboxing.
+# fix under test (bin/fm-spawn.sh's pi_model_validate) strips selected
+# variables from "$bin" --list-models, and files keep the controls independent
+# of whichever environment reaches the fake binary.
 # <fakebin>/.fake-pi-list-status, if present, holds the exit status
 # --list-models should return instead of 0 (pins the unreadable-catalog case).
 # <fakebin>/.fake-pi-extra-row, if present, holds one more catalog row to
 # append. <fakebin>/.fake-pi-refuse-if-session-env, if present, makes
 # --list-models refuse when any of the five ambient Pi nested-session markers
 # (PI_CODING_AGENT, PI_MODEL, PI_PROVIDER, PI_SESSION_ID, PI_SESSION_FILE) is
-# set in ITS OWN environment - the leak the fix must close. $0 is the absolute
+# set in ITS OWN environment - the leak the fix must close - or when the
+# ambient ANTHROPIC_API_KEY credential the launch itself would inherit did not
+# reach it. $0 is the absolute
 # path fm-spawn.sh resolved and invoked, so dirname "$0" reliably finds this
 # same fakebin regardless of cwd or PATH.
 make_fake_pi() {  # <fakebin> <tool>
@@ -60,6 +61,7 @@ case "${1:-}" in
       eval "val=\${$name:-}"
       [ -z "$val" ] || { echo "fake pi: refusing --list-models: ambient $name leaked into the probe's environment" >&2; exit 9; }
     done
+    [ -n "${ANTHROPIC_API_KEY:-}" ] || { echo "fake pi: refusing --list-models: ambient ANTHROPIC_API_KEY did not reach the probe" >&2; exit 8; }
   fi
   printf '%s\n' \
     'provider   model                       context  max-out  thinking  images' \
@@ -248,25 +250,23 @@ test_exempts_codex_native_ultra_pathway() {
 # PI_CODING_AGENT/PI_MODEL/PI_PROVIDER/PI_SESSION_ID/PI_SESSION_FILE - markers
 # Pi sets for ITS OWN nested tool subprocesses, naming the PARENT session's
 # model and an already-open session file. A plain interactive invocation never
-# carries them. pi_model_validate must read the catalog through a clean env
-# (matching fm_worker_account_check's own Pi probe), never whatever ambient
-# identity happened to leak down the spawn chain; the fake pi below refuses
-# --list-models outright if it sees any of those five variables, so this test
-# fails on today's main (which passes the full ambient environment through)
-# and passes once the probe runs clean.
+# carries them. pi_model_validate must strip exactly those five markers while
+# keeping the rest of the ambient environment the launched pane also inherits,
+# such as provider credentials; the fake pi below refuses --list-models if it
+# sees any of the five markers or if ANTHROPIC_API_KEY did not reach it.
 test_strips_ambient_pi_session_env_from_the_probe() {
   local home proj wt fakebin launchlog out status id=guard-ambient-env
   IFS='|' read -r home proj wt fakebin launchlog < <(make_case ambient-env pi "$id")
   fake_pi_refuse_if_session_env "$fakebin"
-  out=$(PI_CODING_AGENT=true PI_MODEL=claude-sonnet-5 PI_PROVIDER=anthropic \
+  out=$(ANTHROPIC_API_KEY=sk-ambient-test PI_CODING_AGENT=true PI_MODEL=claude-sonnet-5 PI_PROVIDER=anthropic \
     PI_SESSION_ID=01a102b3-leaked-parent-session \
     PI_SESSION_FILE=/tmp/leaked-parent-session.jsonl \
     run_scout_spawn "$home" "$wt" "$fakebin" "$launchlog" "$id" "$proj" \
     --harness pi --model claude-opus-5 2>&1)
   status=$?
-  expect_code 0 "$status" "a model validated through a leaked parent Pi session's env must still be accepted once the probe runs clean: $out"
+  expect_code 0 "$status" "a model validated through a leaked parent Pi session's env must still be accepted once the probe strips the session markers: $out"
   assert_grep "model=claude-opus-5" "$home/state/$id.meta" "meta missing the accepted model"
-  pass "fm-spawn: pi_model_validate strips the ambient PI_* session env a nested spawn chain would otherwise leak into the catalog probe"
+  pass "fm-spawn: pi_model_validate strips only the ambient PI_* session markers and keeps ambient credentials for the catalog probe"
 }
 
 # Companion to the above: the probe must still fail CLOSED (refuse the launch)

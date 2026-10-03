@@ -1911,10 +1911,12 @@ pi_supports_tui_mode() {
 # accepted anywhere, so it is a separately gated, explicitly-typed pathway
 # rather than anything Pi's fuzzy matcher could reach by accident.
 #
-# Runs with the same clean, bounded invocation fm_worker_account_check already
-# uses for its own Pi sign-in read (HOME/PATH/TMPDIR/USER/LOGNAME only,
-# FM_WORKER_ACCOUNT_CHECK_SECONDS bound via fm_run_timed), not the caller's
-# full ambient environment. This call runs from inside bin/fm-spawn.sh, which
+# Runs bounded by FM_WORKER_ACCOUNT_CHECK_SECONDS via fm_run_timed, with the
+# caller's ambient environment minus only the five parent-session markers
+# below. Provider credential variables and an ambient PI_CODING_AGENT_DIR stay,
+# because the unpinned launch this guards inherits them too and the catalog
+# must be judged against the same root and credentials. This call runs from
+# inside bin/fm-spawn.sh, which
 # is routinely launched as a descendant of the captain's own live Pi session
 # (a secondmate auto-relaunch runs under the watcher, itself a descendant of
 # that session's own tool execution) and so inherits that session's own
@@ -1928,11 +1930,8 @@ pi_supports_tui_mode() {
 # wedged read from silently eating the outer relaunch timeout and leaving an
 # unbounded `pi` process behind it unreaped.
 pi_model_validate() { # <pi-bin> <model>
-  local bin=$1 model=$2 listing rows matches count selectors name
-  local -a clean=(env -i "HOME=${HOME:-}" "PATH=${PATH:-}")
-  for name in TMPDIR USER LOGNAME; do
-    [ -z "${!name:-}" ] || clean+=("$name=${!name}")
-  done
+  local bin=$1 model=$2 listing rows matches count selectors
+  local -a clean=(env -u PI_CODING_AGENT -u PI_MODEL -u PI_PROVIDER -u PI_SESSION_ID -u PI_SESSION_FILE)
   [ -n "$model" ] && [ "$model" != default ] || return 0
   case "$model" in codex-native/?*) return 0 ;; esac
   listing=$(fm_run_timed "$FM_WORKER_ACCOUNT_CHECK_SECONDS" "${clean[@]}" "$bin" --list-models 2>/dev/null </dev/null) || {
