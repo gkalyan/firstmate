@@ -328,12 +328,16 @@ new_world() {
   printf '%s\n' "$w"
 }
 
-# add_sm_home <w> <id> <window>: a plain (non-git) secondmate home - the
-# probe/respawn machinery under test never requires the home to be a real
-# worktree; a non-git home just makes the unrelated fast-forward sweep log a
-# harmless "not a git repo" skip.
+# add_sm_home <w> <id> <window> [harness] [spawn_gen]: a plain (non-git)
+# secondmate home - the probe/respawn machinery under test never requires the
+# home to be a real worktree; a non-git home just makes the unrelated
+# fast-forward sweep log a harmless "not a git repo" skip. An omitted
+# spawn_gen leaves the meta with none at all, exactly like every pre-existing
+# caller here and like a legacy record predating bin/fm-spawn.sh's incarnation
+# marker - fm_sm_live_within_startup_grace proves nothing from an absent
+# field, so these callers keep today's grace-free behavior unchanged.
 add_sm_home() {
-  local w=$1 id=$2 window=$3 harness=${4:-claude}
+  local w=$1 id=$2 window=$3 harness=${4:-claude} spawn_gen=${5:-}
   local home="$w/$id"
   mkdir -p "$home/bin" "$home/data" "$home/state" "$home/config" "$home/projects"
   printf '%s\n' "$id" > "$home/.fm-secondmate-home"
@@ -346,6 +350,7 @@ add_sm_home() {
     printf 'kind=secondmate\n'
     printf 'harness=%s\n' "$harness"
     printf 'home=%s\n' "$home"
+    [ -z "$spawn_gen" ] || printf 'spawn_gen=%s\n' "$spawn_gen"
   } > "$w/home/state/$id.meta"
 }
 
@@ -430,6 +435,89 @@ test_sweep_refuses_relaunch_on_ledger_errors() {
     [ ! -s "$ledger" ] || fail "a mode-$mode ledger gained rows: $(cat "$ledger")"
   done
   pass "sweep: an unreadable or unwritable relaunch ledger refuses to kill or spawn"
+}
+
+# 2026-10-03 incident regression (defect 1, startup grace): a secondmate pane
+# whose agent has not yet registered reads the same `dead` verdict as one that
+# has genuinely exited, so the sweep used to kill and relaunch a launch that
+# was still starting. fm_sm_live_within_startup_grace (bin/fm-secondmate-
+# liveness-lib.sh) reads the proof from the endpoint's own spawn_gen rather
+# than a blanket delay: a young incarnation is left alone, an old one is
+# still recovered exactly as before.
+test_sweep_leaves_freshly_spawned_secondmate_alone_during_startup_grace() {
+  local w fb tmuxfb log out
+  w=$(new_world sweep-startup-grace)
+  add_sm_home "$w" sm1 firstmate:fm-sm1 claude "s$(($(date +%s) - 5)).1.1"
+  fb=$(make_toolchain "$w"); tmuxfb=$(make_liveness_tmux "$w")
+  log="$w/calls.log"; : > "$log"
+
+  out=$(run_bootstrap "$tmuxfb:$fb" "$w/home" zsh "$log")
+
+  assert_contains "$out" "SECONDMATE_LIVENESS: secondmate sm1: skipped:" \
+    "a freshly spawned endpoint reading dead must be skipped, not acted on"
+  assert_contains "$out" "startup grace" \
+    "the skip reason did not name the startup grace"
+  [ ! -s "$log" ] || fail "a freshly spawned endpoint must never be killed or respawned during its grace: $(cat "$log")"
+  [ ! -e "$w/home/state/.secondmate-relaunch-sm1" ] || fail "a skipped-for-grace probe must never write a relaunch ledger row"
+  pass "sweep: a freshly spawned secondmate reading dead is left alone during its startup grace"
+}
+
+# Companion to the above: the grace is bounded by spawn_gen's own age, not
+# indefinite, so an endpoint that is genuinely old is still recovered exactly
+# as test_sweep_respawns_confirmed_dead_secondmate proves for a legacy record
+# with no spawn_gen at all.
+test_sweep_respawns_once_startup_grace_expires() {
+  local w fb tmuxfb log out
+  w=$(new_world sweep-startup-grace-expired)
+  add_sm_home "$w" sm1 firstmate:fm-sm1 claude "s$(($(date +%s) - 99999)).1.1"
+  fb=$(make_toolchain "$w"); tmuxfb=$(make_liveness_tmux "$w")
+  log="$w/calls.log"; : > "$log"
+
+  out=$(run_bootstrap "$tmuxfb:$fb" "$w/home" zsh "$log")
+
+  assert_not_contains "$out" "SECONDMATE_LIVENESS: secondmate sm1: respawned" \
+    "a successfully respawned secondmate should be handled silently"
+  assert_contains "$(cat "$log")" "kill-window -t =firstmate:=fm-sm1" \
+    "an endpoint well past its startup grace must still be killed before respawn"
+  assert_contains "$(cat "$log")" "new-window" \
+    "an endpoint well past its startup grace must still be relaunched"
+  pass "sweep: a secondmate whose startup grace has expired is still recovered normally"
+}
+
+# 2026-10-03 incident regression (defect 1, concurrent spawn): the watcher's
+# own secondmate_liveness_$id.lock never covers a manual `fm-spawn.sh <id>
+# --secondmate` or `bin/fm-secondmate-restart.sh` invocation, which never
+# takes it - so without this guard the sweep could kill an endpoint a live
+# spawn was still in the middle of creating. fm_secondmate_liveness_relaunch
+# now probes that launch's own per-task spawn lock ($STATE/.spawn-<id>.lock)
+# before touching anything.
+test_relaunch_skips_while_another_spawn_holds_the_task_lock() {
+  local w fb tmuxfb log out holder i=0
+  w=$(new_world sweep-spawn-lock-held)
+  add_sm_home "$w" sm1 firstmate:fm-sm1
+  fb=$(make_toolchain "$w"); tmuxfb=$(make_liveness_tmux "$w")
+  log="$w/calls.log"; : > "$log"
+
+  # A manual `fm-spawn.sh sm1 --secondmate` (or a relaunch already replacing
+  # this exact endpoint) is live right now, holding its own per-task lock.
+  ( STATE="$w/home/state" bash -c \
+      '. "$1" && fm_lock_acquire_wait "$2" && sleep 30' \
+      _ "$ROOT/bin/fm-wake-lib.sh" "$w/home/state/.spawn-sm1.lock" ) &
+  holder=$!
+  while [ ! -d "$w/home/state/.spawn-sm1.lock" ] && [ "$i" -lt 100 ]; do
+    sleep 0.05
+    i=$((i + 1))
+  done
+  [ -d "$w/home/state/.spawn-sm1.lock" ] || fail "the fixture never acquired the spawn lock"
+
+  out=$(run_bootstrap "$tmuxfb:$fb" "$w/home" zsh "$log")
+
+  assert_contains "$out" "SECONDMATE_LIVENESS: secondmate sm1: skipped: another spawn is already creating task sm1" \
+    "a mate another spawn is actively creating must be skipped, not killed or relaunched"
+  [ ! -s "$log" ] || fail "a mate under an active spawn lock must never be killed or respawned: $(cat "$log")"
+  kill "$holder" 2>/dev/null || true
+  wait "$holder" 2>/dev/null || true
+  pass "sweep: a dead-reading mate is left alone while another spawn holds its task lock"
 }
 
 test_sweep_leaves_alive_secondmate_untouched() {
@@ -719,6 +807,9 @@ test_sweep_skipped_under_detect_only
 test_sweep_noop_with_no_secondmate_meta
 test_sweep_skips_mate_whose_liveness_lock_is_held
 test_sweep_refuses_relaunch_on_ledger_errors
+test_sweep_leaves_freshly_spawned_secondmate_alone_during_startup_grace
+test_sweep_respawns_once_startup_grace_expires
+test_relaunch_skips_while_another_spawn_holds_the_task_lock
 test_remote_poll_probe_maps_states
 test_remote_poll_probe_unreachable_preserves_route
 
