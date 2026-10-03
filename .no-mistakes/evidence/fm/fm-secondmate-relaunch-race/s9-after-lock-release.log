@@ -1,0 +1,16 @@
+# lock holder gone; bootstrap sweep:
+(no liveness line: handled silently)
+# ledger:
+1791050591	attempt
+1791050592	failed
+1791050633	attempt
+1791050633	failed
+1791050642	attempt
+1791050645	relaunched
+1791050845	attempt
+1791050848	relaunched
+window=fm-lab-relaunchrace-40200-28177:w3:p2
+harness=claude
+spawn_gen=s1791050847.88676.26961
+{"pane_id":"w3:p2","agent_status":"unknown"}
+ls: /var/folders/b9/kh_24b7n4fj5qzmhc1sr5b2c0000gn/T//fm-lab.l9Y31T/state/.spawn-lsm.lock: No such file or directory

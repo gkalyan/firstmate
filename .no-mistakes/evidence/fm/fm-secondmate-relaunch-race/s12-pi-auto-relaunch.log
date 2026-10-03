@@ -1,0 +1,24 @@
+# config/secondmate-harness: pi claude-opus-5; env carries parent Pi session markers PI_CODING_AGENT/PI_MODEL/PI_PROVIDER/PI_SESSION_ID/PI_SESSION_FILE
+(no liveness line: relaunch handled silently)
+# ledger tail:
+1791050978	attempt
+1791050982	relaunched
+window=fm-lab-relaunchrace-40200-28177:w4:p2
+harness=pi
+model=claude-opus-5
+spawn_gen=s1791050981.49515.28311
+23:39:48 now=1791050988 spawn_gen=s1791050981.49515.28311 state=dead status=skipped kill=0 reason=endpoint spawned 7s ago (backend=herdr), inside the 120s startup grace; agent may still be registering cause=
+23:39:53 now=1791050993 spawn_gen=s1791050981.49515.28311 state=dead status=skipped kill=0 reason=endpoint spawned 12s ago (backend=herdr), inside the 120s startup grace; agent may still be registering cause=
+23:39:58 now=1791050998 spawn_gen=s1791050981.49515.28311 state=dead status=skipped kill=0 reason=endpoint spawned 17s ago (backend=herdr), inside the 120s startup grace; agent may still be registering cause=
+23:40:03 now=1791051003 spawn_gen=s1791050981.49515.28311 state=dead status=skipped kill=0 reason=endpoint spawned 22s ago (backend=herdr), inside the 120s startup grace; agent may still be registering cause=
+23:40:08 now=1791051008 spawn_gen=s1791050981.49515.28311 state=dead status=skipped kill=0 reason=endpoint spawned 27s ago (backend=herdr), inside the 120s startup grace; agent may still be registering cause=
+23:40:13 now=1791051013 spawn_gen=s1791050981.49515.28311 state=dead status=skipped kill=0 reason=endpoint spawned 32s ago (backend=herdr), inside the 120s startup grace; agent may still be registering cause=
+23:40:19 now=1791051019 spawn_gen=s1791050981.49515.28311 state=dead status=skipped kill=0 reason=endpoint spawned 38s ago (backend=herdr), inside the 120s startup grace; agent may still be registering cause=
+23:40:24 now=1791051024 spawn_gen=s1791050981.49515.28311 state=dead status=skipped kill=0 reason=endpoint spawned 43s ago (backend=herdr), inside the 120s startup grace; agent may still be registering cause=
+23:40:29 now=1791051029 spawn_gen=s1791050981.49515.28311 state=dead status=skipped kill=0 reason=endpoint spawned 48s ago (backend=herdr), inside the 120s startup grace; agent may still be registering cause=
+23:40:34 now=1791051034 spawn_gen=s1791050981.49515.28311 state=dead status=skipped kill=0 reason=endpoint spawned 53s ago (backend=herdr), inside the 120s startup grace; agent may still be registering cause=
+23:40:39 now=1791051039 spawn_gen=s1791050981.49515.28311 state=dead status=skipped kill=0 reason=endpoint spawned 58s ago (backend=herdr), inside the 120s startup grace; agent may still be registering cause=
+23:40:45 now=1791051045 spawn_gen=s1791050981.49515.28311 state=alive status=alive kill=0 reason= cause=
+23:40:50 now=1791051050 spawn_gen=s1791050981.49515.28311 state=alive status=alive kill=0 reason= cause=
+23:40:55 now=1791051055 spawn_gen=s1791050981.49515.28311 state=alive status=alive kill=0 reason= cause=
+{"pane_id":"w4:p2","agent_status":"working"}

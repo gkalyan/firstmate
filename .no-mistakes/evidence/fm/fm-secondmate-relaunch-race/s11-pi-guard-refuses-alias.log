@@ -1,0 +1,6 @@
+$ bash --version: GNU bash, version 3.2.57(1)-release (arm64-apple-darwin25)
+$ PI_CODING_AGENT=1 PI_MODEL=claude-opus-5 PI_PROVIDER=anthropic PI_SESSION_ID=parent-session-xyz PI_SESSION_FILE=<file> fm-spawn.sh lsmneg <home> --secondmate --backend herdr --harness pi --model sonnet
+fm-gate-refuse: gate agent lifecycle permitted only against lab home /var/folders/b9/kh_24b7n4fj5qzmhc1sr5b2c0000gn/T//fm-lab.l9Y31T
+error: Pi model 'sonnet' matches no entry in '/opt/homebrew/bin/pi --list-models' (Pi would fuzzy-match it, possibly to an uncredentialed provider); use one of these exact ids: anthropic/claude-fable-5 anthropic/claude-fable-5-1 anthropic/claude-haiku-4-5 anthropic/claude-haiku-4-5-20251001 anthropic/claude-opus-4-5 anthropic/claude-opus-4-5-20251101 anthropic/claude-opus-4-6 anthropic/claude-opus-4-7 anthropic/claude-opus-4-8 anthropic/claude-opus-5 anthropic/claude-opus-5-5 anthropic/claude-sonnet-4-5 anthropic/claude-sonnet-4-5-20250929 anthropic/claude-sonnet-4-6 anthropic/claude-sonnet-5 anthropic/claude-sonnet-5-5
+rc=1
+ls: /var/folders/b9/kh_24b7n4fj5qzmhc1sr5b2c0000gn/T//fm-lab.l9Y31T/state/lsmneg.meta: No such file or directory

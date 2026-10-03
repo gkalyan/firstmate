@@ -1,0 +1,40 @@
+ FIRSTMATE_OP: v1 launch-brief: Secondmate lsm charter: idle, do nothing.
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ Update Available
+ New version 1.0.1 is available. Run pi update
+ Changelog: https://pi.dev/changelog
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ Package Updates Available
+ Package updates are available. Run pi update --extensions
+ Packages:
+ - @gotgenes/pi-anthropic-auth
+ - github.com/DietrichGebert/ponytail
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+ This is a secondmate launch brief that says to stay idle and do nothing by default. But the AGENTS.md instructions
+ mention running the session-start script once for lock/recovery purposes, so the safest approach is to run that once
+ and then remain silently idle as instructed.
+
+
+ $ bin/fm-session-start.sh 2>&1 | head -120 (timeout 180s)
+
+ ... (164 earlier lines, ctrl+o to expand)
+ handoff delivery, project clone refresh with its drift reporting, and inactive terminal-outcome reconciliation.
+ (silent - no problems found)
+
+ ================================================================================
+ CONTEXT
+
+ Took 7.9s
+
+
+── ⠸ Working ───────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+/private/var/folders/b9/kh_24b7n4fj5qzmhc1sr5b2c0000gn/T/fm-mate.AB68sV (master)
+↑4 ↓292 W31k CH0.0% $0.202 (sub) 3.4%/1.0M (auto)                                                 claude-opus-5 • medium
+● 🐴 ponytail: ⚡ FULL

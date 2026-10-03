@@ -1,0 +1,1 @@
+[2026-10-03T23:37:42+0530] secondmate lsm liveness: endpoint spawned 15s ago (backend=herdr), inside the 120s startup grace; agent may still be registering

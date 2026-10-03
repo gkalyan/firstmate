@@ -1,0 +1,14 @@
+23:34:13 now=1791050653 spawn_gen=s1791050644.20010.16355 state=dead status=skipped kill=0 reason=endpoint spawned 9s ago (backend=herdr), inside the 120s startup grace; agent may still be registering cause=
+23:34:17 now=1791050657 spawn_gen=s1791050644.20010.16355 state=dead status=skipped kill=0 reason=endpoint spawned 13s ago (backend=herdr), inside the 120s startup grace; agent may still be registering cause=
+[bootstrap sweep]
+SECONDMATE_LIVENESS: secondmate lsm: skipped: endpoint spawned 14s ago (backend=herdr), inside the 120s startup grace; agent may still be registering
+23:34:24 now=1791050664 spawn_gen=s1791050644.20010.16355 state=dead status=skipped kill=0 reason=endpoint spawned 20s ago (backend=herdr), inside the 120s startup grace; agent may still be registering cause=
+23:34:28 now=1791050668 spawn_gen=s1791050644.20010.16355 state=dead status=skipped kill=0 reason=endpoint spawned 24s ago (backend=herdr), inside the 120s startup grace; agent may still be registering cause=
+23:34:32 now=1791050672 spawn_gen=s1791050644.20010.16355 state=dead status=skipped kill=0 reason=endpoint spawned 28s ago (backend=herdr), inside the 120s startup grace; agent may still be registering cause=
+[bootstrap sweep]
+SECONDMATE_LIVENESS: secondmate lsm: skipped: endpoint spawned 29s ago (backend=herdr), inside the 120s startup grace; agent may still be registering
+23:34:39 now=1791050679 spawn_gen=s1791050644.20010.16355 state=dead status=skipped kill=0 reason=endpoint spawned 35s ago (backend=herdr), inside the 120s startup grace; agent may still be registering cause=
+23:34:43 now=1791050683 spawn_gen=s1791050644.20010.16355 state=dead status=skipped kill=0 reason=endpoint spawned 39s ago (backend=herdr), inside the 120s startup grace; agent may still be registering cause=
+23:34:47 now=1791050687 spawn_gen=s1791050644.20010.16355 state=dead status=skipped kill=0 reason=endpoint spawned 43s ago (backend=herdr), inside the 120s startup grace; agent may still be registering cause=
+23:34:51 now=1791050691 spawn_gen=s1791050644.20010.16355 state=dead status=skipped kill=0 reason=endpoint spawned 47s ago (backend=herdr), inside the 120s startup grace; agent may still be registering cause=
+23:34:55 now=1791050695 spawn_gen=s1791050644.20010.16355 state=dead status=skipped kill=0 reason=endpoint spawned 51s ago (backend=herdr), inside the 120s startup grace; agent may still be registering cause=

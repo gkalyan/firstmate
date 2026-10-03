@@ -1,0 +1,8 @@
+probe: state=missing status=relaunchable kill=0 reason=
+relaunch rc=1 status=relaunchable spawn_rc=1 reason=
+--- spawn output:
+fm-gate-refuse: gate agent lifecycle permitted only against lab home /var/folders/b9/kh_24b7n4fj5qzmhc1sr5b2c0000gn/T//fm-lab.l9Y31T
+warning: secondmate lsm sync skipped before launch: primary default-branch commit cannot be resolved
+/Users/gkalyan/.no-mistakes/worktrees/27218f1193f7/01M41E0FZR7CRQR39TDXMCB24A/bin/backends/tmux.sh: line 77: tmux: command not found
+/Users/gkalyan/.no-mistakes/worktrees/27218f1193f7/01M41E0FZR7CRQR39TDXMCB24A/bin/backends/tmux.sh: line 99: tmux: command not found
+/Users/gkalyan/.no-mistakes/worktrees/27218f1193f7/01M41E0FZR7CRQR39TDXMCB24A/bin/backends/tmux.sh: line 103: tmux: command not found

@@ -1,0 +1,15 @@
+# spawn lock held by pid 82486 (simulated concurrent manual fm-spawn lsm --secondmate)
+/var/folders/b9/kh_24b7n4fj5qzmhc1sr5b2c0000gn/T//fm-lab.l9Y31T/state/.spawn-lsm.lock
+# pane before:
+{"pane_id":"w2:p2","agent_status":"unknown"}
+# bootstrap sweep:
+SECONDMATE_LIVENESS: secondmate lsm: skipped: another spawn is already creating task lsm; leaving its endpoint alone
+# pane after:
+{"pane_id":"w2:p2","agent_status":"unknown"}
+# ledger:
+1791050591	attempt
+1791050592	failed
+1791050633	attempt
+1791050633	failed
+1791050642	attempt
+1791050645	relaunched
