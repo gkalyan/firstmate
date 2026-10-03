@@ -112,12 +112,7 @@ fm_sm_live_first_line() {
 
 # fm_sm_live_spawn_gen_epoch <meta>: the epoch second embedded in the meta's
 # current spawn_gen (bin/fm-spawn.sh's `s<epoch>.<pid>.<random>` incarnation
-# marker), or fails (prints nothing) when the field is absent or malformed. A
-# persistent remote secondmate's meta carries no spawn_gen at all - it is
-# never republished through fm-spawn.sh's local launch path - so this
-# correctly fails closed for that shape instead of inventing a timestamp; the
-# startup-grace check below treats that failure as "no proof of freshness",
-# which preserves today's behavior for remote routes.
+# marker), or fails (prints nothing) when the field is absent or malformed.
 fm_sm_live_spawn_gen_epoch() {  # <meta>
   local meta=$1 gen epoch
   gen=$(fm_meta_get "$meta" spawn_gen 2>/dev/null || true)
@@ -258,10 +253,6 @@ fm_secondmate_liveness_probe() {  # <meta> <id> <full|poll>
         FM_SM_LIVE_LINE="remote secondmate $id already live (host=$remote_host)"
         ;;
       dead|missing)
-        if fm_sm_live_within_startup_grace "$meta"; then
-          FM_SM_LIVE_REASON="remote endpoint spawned ${FM_SM_LIVE_GRACE_AGE}s ago (host=$remote_host), inside the ${FM_SECONDMATE_LIVENESS_STARTUP_GRACE_SECS}s startup grace; agent may still be registering"
-          return 0
-        fi
         FM_SM_LIVE_STATUS=relaunchable
         FM_SM_LIVE_CAUSE="remote endpoint $agent_state on its configured host"
         FM_SM_LIVE_WHERE="host=$remote_host"
