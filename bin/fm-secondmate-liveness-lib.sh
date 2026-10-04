@@ -42,8 +42,15 @@
 #          when a relaunch is actually authorized.
 #
 # Concurrency: fm_secondmate_liveness_lock serializes probe+kill+relaunch per
-# task across the bootstrap sweep and the watcher tick, so a concurrent
-# relaunch can never be observed mid-flight as a dead endpoint and killed.
+# task across the bootstrap sweep and the watcher tick, so these two drivers
+# can never observe or act on the same endpoint at once. It does NOT cover a
+# manual `fm-spawn.sh <id> --secondmate` or `bin/fm-secondmate-restart.sh`
+# invocation, which never takes this lock; fm_secondmate_liveness_relaunch
+# instead probes that launch's own per-task spawn lock
+# ($STATE/.spawn-<id>.lock) before acting, and
+# fm_sm_live_within_startup_grace gives a just-published endpoint a window
+# before `no-agent` is trusted as death at all, so neither path can close an
+# endpoint a live spawn just created.
 # The attempt ledger (.secondmate-relaunch-<id>, one line per attempt plus one
 # per outcome) is both the durable relaunch record and the input to the
 # watcher's relaunch bound; teardown removes it.
@@ -51,6 +58,24 @@
 set -u
 
 FM_SM_LIVE_LIB_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+
+# Startup grace for a just-launched endpoint, bound to that exact incarnation
+# rather than a blanket poll-cadence delay. A fresh Herdr pane's agent
+# registers only once the harness itself finishes starting up inside it, so a
+# probe landing in that window reads `no-agent` (mapped to `dead` below) for
+# reasons that have nothing to do with the agent being gone - acting on it
+# kills a launch that was still completing. The bound is read from the
+# endpoint's own spawn_gen (bin/fm-spawn.sh's `s<epoch>.<pid>.<random>`
+# incarnation marker, refreshed by every fresh spawn AND every relaunch), so an
+# endpoint that is actually old is never delayed by it, and a mate that was
+# relaunched a minute ago gets its own fresh window rather than inheriting the
+# original launch's clock. Default matches FM_SECONDMATE_LIVENESS_TIMEOUT
+# (120s): this codebase already treats that as how long a legitimate spawn may
+# take, so the grace that precedes recovery eligibility uses the same bound.
+FM_SECONDMATE_LIVENESS_STARTUP_GRACE_SECS=${FM_SECONDMATE_LIVENESS_STARTUP_GRACE_SECS:-}
+case "$FM_SECONDMATE_LIVENESS_STARTUP_GRACE_SECS" in
+  ''|*[!0-9]*) FM_SECONDMATE_LIVENESS_STARTUP_GRACE_SECS=120 ;;
+esac
 
 # shellcheck source=bin/fm-backend.sh
 . "$FM_SM_LIVE_LIB_DIR/fm-backend.sh"
@@ -83,6 +108,38 @@ fm_secondmate_liveness_unlock() {  # <id>
 
 fm_sm_live_first_line() {
   printf '%s\n' "$1" | sed -n '1s/[[:space:]]\{1,\}/ /g;1p'
+}
+
+# fm_sm_live_spawn_gen_epoch <meta>: the epoch second embedded in the meta's
+# current spawn_gen (bin/fm-spawn.sh's `s<epoch>.<pid>.<random>` incarnation
+# marker), or fails (prints nothing) when the field is absent or malformed.
+fm_sm_live_spawn_gen_epoch() {  # <meta>
+  local meta=$1 gen epoch
+  gen=$(fm_meta_get "$meta" spawn_gen 2>/dev/null || true)
+  case "$gen" in
+    s[0-9]*) ;;
+    *) return 1 ;;
+  esac
+  epoch=${gen#s}
+  epoch=${epoch%%.*}
+  case "$epoch" in ''|*[!0-9]*) return 1 ;; esac
+  printf '%s\n' "$epoch"
+}
+
+# fm_sm_live_within_startup_grace <meta>: true (0) when <meta>'s spawn_gen
+# proves its current incarnation is younger than
+# FM_SECONDMATE_LIVENESS_STARTUP_GRACE_SECS, with FM_SM_LIVE_GRACE_AGE set to
+# the computed age on a true result. A missing or malformed spawn_gen, or a
+# recorded epoch in the future (clock skew), proves nothing, so it returns
+# false rather than granting an unbounded grace.
+fm_sm_live_within_startup_grace() {  # <meta>
+  local meta=$1 epoch now
+  FM_SM_LIVE_GRACE_AGE=
+  epoch=$(fm_sm_live_spawn_gen_epoch "$meta") || return 1
+  now=$(date +%s)
+  [ "$epoch" -le "$now" ] || return 1
+  FM_SM_LIVE_GRACE_AGE=$((now - epoch))
+  [ "$FM_SM_LIVE_GRACE_AGE" -lt "$FM_SECONDMATE_LIVENESS_STARTUP_GRACE_SECS" ]
 }
 
 # One line per relaunch attempt and one per outcome, keyed by epoch, plus a
@@ -228,6 +285,10 @@ fm_secondmate_liveness_probe() {  # <meta> <id> <full|poll>
       FM_SM_LIVE_LINE="secondmate $id already live (backend=$backend)"
       ;;
     dead|missing)
+      if fm_sm_live_within_startup_grace "$meta"; then
+        FM_SM_LIVE_REASON="endpoint spawned ${FM_SM_LIVE_GRACE_AGE}s ago (backend=$backend), inside the ${FM_SECONDMATE_LIVENESS_STARTUP_GRACE_SECS}s startup grace; agent may still be registering"
+        return 0
+      fi
       FM_SM_LIVE_STATUS=relaunchable
       if [ "$agent_state" = dead ]; then
         FM_SM_LIVE_KILL=1
@@ -264,9 +325,35 @@ fm_secondmate_liveness_probe() {  # <meta> <id> <full|poll>
 # read or the attempt row cannot be appended, nothing is killed or spawned: the verdict becomes
 # FM_SM_LIVE_STATUS=skipped with FM_SM_LIVE_REASON set and this returns 1.
 # Caller holds the liveness lock and owns reporting.
+#
+# Before touching anything, this probes <id>'s own spawn lock
+# ($STATE/.spawn-<id>.lock, the same lock bin/fm-spawn.sh holds for its whole
+# launch) by acquiring then immediately releasing it. A busy lock means
+# another spawn - a concurrent manual launch, or a relaunch already replacing
+# this exact endpoint - is live right now, between its own startup-grace
+# window and its first meta publish; killing or re-spawning on top of it would
+# race that live spawn's own endpoint instead of recovering a dead one, so
+# this skips rather than acts. The probe is non-destructive: a clean acquire
+# is released at once, so the real spawn this function goes on to run gets to
+# take the lock itself.
 fm_secondmate_liveness_relaunch() {  # <meta> <id> [timeout-secs]
-  local meta=$1 id=$2 timeout=${3:-}
+  local meta=$1 id=$2 timeout=${3:-} spawn_lock
   FM_SM_LIVE_OUT='' FM_SM_LIVE_RC=0
+  fm_sm_live_require_locks || {
+    FM_SM_LIVE_STATUS=skipped
+    FM_SM_LIVE_REASON="lock helpers could not be loaded; endpoint left $FM_SM_LIVE_STATE"
+    FM_SM_LIVE_RC=1
+    return 1
+  }
+  spawn_lock="$STATE/.spawn-$id.lock"
+  if fm_lock_try_acquire "$spawn_lock"; then
+    fm_lock_release "$spawn_lock" || true
+  else
+    FM_SM_LIVE_STATUS=skipped
+    FM_SM_LIVE_REASON="another spawn is already creating task $id; leaving its endpoint alone"
+    FM_SM_LIVE_RC=1
+    return 1
+  fi
   if ! fm_secondmate_liveness_recent_attempts "$id" 0 >/dev/null; then
     FM_SM_LIVE_STATUS=skipped
     FM_SM_LIVE_REASON="relaunch ledger $STATE/.secondmate-relaunch-$id is unreadable; endpoint left $FM_SM_LIVE_STATE"

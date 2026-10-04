@@ -1910,11 +1910,31 @@ pi_supports_tui_mode() {
 # already requires that exact prefixed form plus --effort ultra before it is
 # accepted anywhere, so it is a separately gated, explicitly-typed pathway
 # rather than anything Pi's fuzzy matcher could reach by accident.
+#
+# Runs bounded by FM_WORKER_ACCOUNT_CHECK_SECONDS via fm_run_timed, with the
+# caller's ambient environment minus only the five parent-session markers
+# below. Provider credential variables and an ambient PI_CODING_AGENT_DIR stay,
+# because the unpinned launch this guards inherits them too and the catalog
+# must be judged against the same root and credentials. This call runs from
+# inside bin/fm-spawn.sh, which
+# is routinely launched as a descendant of the captain's own live Pi session
+# (a secondmate auto-relaunch runs under the watcher, itself a descendant of
+# that session's own tool execution) and so inherits that session's own
+# PI_CODING_AGENT, PI_MODEL, PI_PROVIDER, PI_SESSION_ID, and PI_SESSION_FILE -
+# markers Pi sets for ITS OWN nested tool subprocesses, naming the PARENT
+# session's model and an already-open session file, never meant for an
+# unrelated `--list-models` probe to inherit. A plain interactive invocation
+# never carries them, which is exactly the gap between "interactively it
+# exits 0 in 0.4s" and a watcher-driven launch reading a different, possibly
+# contended catalog under the parent's own identity. The bound keeps a slow or
+# wedged read from silently eating the outer relaunch timeout and leaving an
+# unbounded `pi` process behind it unreaped.
 pi_model_validate() { # <pi-bin> <model>
   local bin=$1 model=$2 listing rows matches count selectors
+  local -a clean=(env -u PI_CODING_AGENT -u PI_MODEL -u PI_PROVIDER -u PI_SESSION_ID -u PI_SESSION_FILE)
   [ -n "$model" ] && [ "$model" != default ] || return 0
   case "$model" in codex-native/?*) return 0 ;; esac
-  listing=$("$bin" --list-models 2>/dev/null) || {
+  listing=$(fm_run_timed "$FM_WORKER_ACCOUNT_CHECK_SECONDS" "${clean[@]}" "$bin" --list-models 2>/dev/null </dev/null) || {
     echo "error: '$bin --list-models' could not be read; cannot confirm Pi model '$model' has a credentialed provider, so refusing rather than launching against an unconfirmed provider" >&2
     return 1
   }

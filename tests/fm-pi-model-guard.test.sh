@@ -25,33 +25,68 @@ TMP_ROOT=$(fm_test_tmproot fm-pi-model-guard)
 # A fake pi/pi-signed that answers --help (for the --tui-mode probe) and
 # --list-models with a fixed catalog matching the real installed catalog's
 # shape (no Bedrock row, because an uncredentialed provider is never listed -
-# see the pi harness reference for the empirical check). FM_FAKE_PI_EXTRA_ROW
-# appends one more row. --list-models exits nonzero when
-# FM_FAKE_PI_LIST_STATUS is set, to pin the unreadable-catalog case.
+# see the pi harness reference for the empirical check).
+#
+# Control flags live in FILES under <fakebin>, not environment variables: the
+# fix under test (bin/fm-spawn.sh's pi_model_validate) strips selected
+# variables from "$bin" --list-models, and files keep the controls independent
+# of whichever environment reaches the fake binary.
+# <fakebin>/.fake-pi-list-status, if present, holds the exit status
+# --list-models should return instead of 0 (pins the unreadable-catalog case).
+# <fakebin>/.fake-pi-extra-row, if present, holds one more catalog row to
+# append. <fakebin>/.fake-pi-refuse-if-session-env, if present, makes
+# --list-models refuse when any of the five ambient Pi nested-session markers
+# (PI_CODING_AGENT, PI_MODEL, PI_PROVIDER, PI_SESSION_ID, PI_SESSION_FILE) is
+# set in ITS OWN environment - the leak the fix must close - or when the
+# ambient ANTHROPIC_API_KEY credential the launch itself would inherit did not
+# reach it. $0 is the absolute
+# path fm-spawn.sh resolved and invoked, so dirname "$0" reliably finds this
+# same fakebin regardless of cwd or PATH.
 make_fake_pi() {  # <fakebin> <tool>
   local fakebin=$1 tool=$2
   cat > "$fakebin/$tool" <<'SH'
 #!/usr/bin/env bash
 set -u
+self_dir=$(cd "$(dirname "$0")" 2>/dev/null && pwd -P) || self_dir=$(dirname "$0")
 case "${1:-}" in
 --help)
   printf '%s\n' 'Pi 0.87.1' 'Options: --help --tui-mode <mode>'
   ;;
 --list-models)
-  [ "${FM_FAKE_PI_LIST_STATUS:-0}" -eq 0 ] || exit "${FM_FAKE_PI_LIST_STATUS}"
+  if [ -e "$self_dir/.fake-pi-list-status" ]; then
+    exit "$(cat "$self_dir/.fake-pi-list-status")"
+  fi
+  if [ -e "$self_dir/.fake-pi-refuse-if-session-env" ]; then
+    for name in PI_CODING_AGENT PI_MODEL PI_PROVIDER PI_SESSION_ID PI_SESSION_FILE; do
+      eval "val=\${$name:-}"
+      [ -z "$val" ] || { echo "fake pi: refusing --list-models: ambient $name leaked into the probe's environment" >&2; exit 9; }
+    done
+    [ -n "${ANTHROPIC_API_KEY:-}" ] || { echo "fake pi: refusing --list-models: ambient ANTHROPIC_API_KEY did not reach the probe" >&2; exit 8; }
+  fi
   printf '%s\n' \
     'provider   model                       context  max-out  thinking  images' \
     'anthropic  claude-opus-5               1M       128K     yes       yes   ' \
     'anthropic  claude-opus-5-5             1M       128K     yes       yes   ' \
     'anthropic  claude-sonnet-5             1M       128K     yes       yes   ' \
     'openai-codex  gpt-5.6-sol              400K     128K     yes       yes   '
-  [ -z "${FM_FAKE_PI_EXTRA_ROW:-}" ] || printf '%s\n' "$FM_FAKE_PI_EXTRA_ROW"
+  [ ! -e "$self_dir/.fake-pi-extra-row" ] || cat "$self_dir/.fake-pi-extra-row"
   ;;
 esac
 exit 0
 SH
   chmod +x "$fakebin/$tool"
 }
+
+# fake_pi_set_list_status <fakebin> <status>: make the next --list-models call
+# in this fakebin exit <status> instead of 0.
+fake_pi_set_list_status() { printf '%s\n' "$2" > "$1/.fake-pi-list-status"; }
+
+# fake_pi_set_extra_row <fakebin> <row>: append one more catalog row.
+fake_pi_set_extra_row() { printf '%s\n' "$2" > "$1/.fake-pi-extra-row"; }
+
+# fake_pi_refuse_if_session_env <fakebin>: make --list-models refuse if it
+# sees an ambient PI_* nested-session marker in its own environment.
+fake_pi_refuse_if_session_env() { : > "$1/.fake-pi-refuse-if-session-env"; }
 
 make_case() {  # <name> <harness> <id> -> echoes home|proj|wt|fakebin|launchlog
   local name=$1 harness=$2 id=$3 case_dir home proj wt fakebin
@@ -126,8 +161,8 @@ test_ambiguous_bare_id_suggests_accepted_selector() {
   local home proj wt fakebin launchlog out id
   id=guard-ambiguous
   IFS='|' read -r home proj wt fakebin launchlog < <(make_case ambiguous pi "$id")
-  out=$(FM_FAKE_PI_EXTRA_ROW='github-copilot  claude-sonnet-5  200K  64K  yes  yes' \
-    run_scout_spawn "$home" "$wt" "$fakebin" "$launchlog" "$id" "$proj" --harness pi --model claude-sonnet-5 2>&1)
+  fake_pi_set_extra_row "$fakebin" 'github-copilot  claude-sonnet-5  200K  64K  yes  yes'
+  out=$(run_scout_spawn "$home" "$wt" "$fakebin" "$launchlog" "$id" "$proj" --harness pi --model claude-sonnet-5 2>&1)
   expect_code 1 "$?" "a bare id listed by two providers must be refused: $out"
   assert_contains "$out" "matches more than one catalog entry" "refusal did not name the ambiguity"
   assert_contains "$out" "anthropic/claude-sonnet-5" "refusal did not suggest an exact provider/id"
@@ -135,8 +170,8 @@ test_ambiguous_bare_id_suggests_accepted_selector() {
 
   id=guard-ambiguous-retry
   IFS='|' read -r home proj wt fakebin launchlog < <(make_case ambiguous-retry pi "$id")
-  out=$(FM_FAKE_PI_EXTRA_ROW='github-copilot  claude-sonnet-5  200K  64K  yes  yes' \
-    run_scout_spawn "$home" "$wt" "$fakebin" "$launchlog" "$id" "$proj" --harness pi --model anthropic/claude-sonnet-5 2>&1)
+  fake_pi_set_extra_row "$fakebin" 'github-copilot  claude-sonnet-5  200K  64K  yes  yes'
+  out=$(run_scout_spawn "$home" "$wt" "$fakebin" "$launchlog" "$id" "$proj" --harness pi --model anthropic/claude-sonnet-5 2>&1)
   expect_code 0 "$?" "retrying with the suggested provider/id must be accepted: $out"
   pass "fm-spawn: pi_model_validate refuses an ambiguous bare id and its suggestion is accepted"
 }
@@ -145,8 +180,8 @@ test_colliding_selector_is_never_suggested() {
   local home proj wt fakebin launchlog out id
   id=guard-collision
   IFS='|' read -r home proj wt fakebin launchlog < <(make_case collision pi "$id")
-  out=$(FM_FAKE_PI_EXTRA_ROW='openrouter  anthropic/claude-sonnet-5  200K  64K  yes  yes' \
-    run_scout_spawn "$home" "$wt" "$fakebin" "$launchlog" "$id" "$proj" --harness pi --model sonnet 2>&1)
+  fake_pi_set_extra_row "$fakebin" 'openrouter  anthropic/claude-sonnet-5  200K  64K  yes  yes'
+  out=$(run_scout_spawn "$home" "$wt" "$fakebin" "$launchlog" "$id" "$proj" --harness pi --model sonnet 2>&1)
   expect_code 1 "$?" "bare alias 'sonnet' must be refused: $out"
   assert_not_contains "$out" " anthropic/claude-sonnet-5" "refusal offered a selector that is itself ambiguous"
   assert_contains "$out" " anthropic/claude-opus-5" "refusal dropped an unambiguous selector"
@@ -154,8 +189,8 @@ test_colliding_selector_is_never_suggested() {
 
   id=guard-collision-retry
   IFS='|' read -r home proj wt fakebin launchlog < <(make_case collision-retry pi "$id")
-  out=$(FM_FAKE_PI_EXTRA_ROW='openrouter  anthropic/claude-sonnet-5  200K  64K  yes  yes' \
-    run_scout_spawn "$home" "$wt" "$fakebin" "$launchlog" "$id" "$proj" --harness pi --model openrouter/anthropic/claude-sonnet-5 2>&1)
+  fake_pi_set_extra_row "$fakebin" 'openrouter  anthropic/claude-sonnet-5  200K  64K  yes  yes'
+  out=$(run_scout_spawn "$home" "$wt" "$fakebin" "$launchlog" "$id" "$proj" --harness pi --model openrouter/anthropic/claude-sonnet-5 2>&1)
   expect_code 0 "$?" "a suggested unambiguous selector must be accepted: $out"
   pass "fm-spawn: pi_model_validate never suggests a selector that collides with another row's bare id"
 }
@@ -184,7 +219,8 @@ test_accepts_exact_anthropic_ids() {
 test_refuses_unreadable_catalog() {
   local home proj wt fakebin launchlog out status id=guard-unreadable
   IFS='|' read -r home proj wt fakebin launchlog < <(make_case unreadable pi "$id")
-  out=$(FM_FAKE_PI_LIST_STATUS=1 run_scout_spawn "$home" "$wt" "$fakebin" "$launchlog" "$id" "$proj" \
+  fake_pi_set_list_status "$fakebin" 1
+  out=$(run_scout_spawn "$home" "$wt" "$fakebin" "$launchlog" "$id" "$proj" \
     --harness pi --model claude-opus-5 2>&1)
   expect_code 1 "$?" "an unreadable Pi catalog must refuse rather than launch unvalidated: $out"
   assert_contains "$out" "could not be read" "refusal did not name the unreadable catalog"
@@ -208,6 +244,96 @@ test_exempts_codex_native_ultra_pathway() {
   pass "fm-spawn: pi_model_validate exempts the separately-gated codex-native/ultra pathway"
 }
 
+# 2026-10-03 incident regression: a secondmate auto-relaunch runs
+# bin/fm-spawn.sh as a descendant of the watcher, itself a descendant of the
+# captain's own live Pi session, so it inherits that session's own
+# PI_CODING_AGENT/PI_MODEL/PI_PROVIDER/PI_SESSION_ID/PI_SESSION_FILE - markers
+# Pi sets for ITS OWN nested tool subprocesses, naming the PARENT session's
+# model and an already-open session file. A plain interactive invocation never
+# carries them. pi_model_validate must strip exactly those five markers while
+# keeping the rest of the ambient environment the launched pane also inherits,
+# such as provider credentials; the fake pi below refuses --list-models if it
+# sees any of the five markers or if ANTHROPIC_API_KEY did not reach it.
+test_strips_ambient_pi_session_env_from_the_probe() {
+  local home proj wt fakebin launchlog out status id=guard-ambient-env
+  IFS='|' read -r home proj wt fakebin launchlog < <(make_case ambient-env pi "$id")
+  fake_pi_refuse_if_session_env "$fakebin"
+  out=$(ANTHROPIC_API_KEY=sk-ambient-test PI_CODING_AGENT=true PI_MODEL=claude-sonnet-5 PI_PROVIDER=anthropic \
+    PI_SESSION_ID=01a102b3-leaked-parent-session \
+    PI_SESSION_FILE=/tmp/leaked-parent-session.jsonl \
+    run_scout_spawn "$home" "$wt" "$fakebin" "$launchlog" "$id" "$proj" \
+    --harness pi --model claude-opus-5 2>&1)
+  status=$?
+  expect_code 0 "$status" "a model validated through a leaked parent Pi session's env must still be accepted once the probe strips the session markers: $out"
+  assert_grep "model=claude-opus-5" "$home/state/$id.meta" "meta missing the accepted model"
+  pass "fm-spawn: pi_model_validate strips only the ambient PI_* session markers and keeps ambient credentials for the catalog probe"
+}
+
+# Companion to the above: the probe must still fail CLOSED (refuse the launch)
+# when the catalog genuinely cannot be read, even through the clean env - the
+# fix must not weaken that refusal while fixing the leak.
+test_unreadable_catalog_still_refuses_under_clean_env() {
+  local home proj wt fakebin launchlog out status id=guard-ambient-env-unreadable
+  IFS='|' read -r home proj wt fakebin launchlog < <(make_case ambient-env-unreadable pi "$id")
+  fake_pi_set_list_status "$fakebin" 1
+  out=$(PI_CODING_AGENT=true PI_MODEL=claude-sonnet-5 PI_SESSION_ID=leaked \
+    run_scout_spawn "$home" "$wt" "$fakebin" "$launchlog" "$id" "$proj" \
+    --harness pi --model claude-opus-5 2>&1)
+  status=$?
+  expect_code 1 "$status" "a genuinely unreadable catalog must still refuse under the clean-env probe: $out"
+  assert_contains "$out" "could not be read" "refusal did not name the unreadable catalog"
+  [ ! -e "$home/state/$id.meta" ] || fail "unreadable-catalog refusal still published task metadata"
+  pass "fm-spawn: pi_model_validate still refuses an unreadable catalog under the clean-env probe"
+}
+
+# 2026-10-03 incident regression, second half: pi_model_validate had no bound
+# of its own, so a catalog read that hangs (a contended or slow-starting Pi
+# process on the same account root, exactly what a premature auto-relaunch
+# produces) silently ate the auto-relaunch's own outer timeout instead of
+# failing fast. FM_WORKER_ACCOUNT_CHECK_SECONDS=1 here pins that the probe
+# is bounded by that same constant fm_worker_account_check already uses, not
+# by the caller's own much longer outer bound.
+test_bounds_a_hanging_catalog_read() {
+  local home proj wt fakebin out status id=guard-hang start_s end_s elapsed case_dir
+  case_dir="$TMP_ROOT/hang"
+  home="$case_dir/home"
+  proj="$case_dir/project"
+  wt="$case_dir/wt"
+  fakebin=$(make_spawn_fakebin "$case_dir/fake")
+  cat > "$fakebin/pi" <<'SH'
+#!/usr/bin/env bash
+set -u
+case "${1:-}" in
+--help)
+  printf '%s\n' 'Pi 0.87.1' 'Options: --help --tui-mode <mode>'
+  ;;
+--list-models)
+  sleep 30
+  printf '%s\n' \
+    'provider   model                       context  max-out  thinking  images' \
+    'anthropic  claude-opus-5               1M       128K     yes       yes   '
+  ;;
+esac
+exit 0
+SH
+  chmod +x "$fakebin/pi"
+  fm_test_spawn_home "$home" pi
+  fm_git_worktree "$proj" "$wt" wt-hang
+  fm_test_spawn_brief "$home" "$id"
+  : > "$case_dir/launch.log"
+  start_s=$(date +%s)
+  out=$(FM_WORKER_ACCOUNT_CHECK_SECONDS=1 \
+    run_scout_spawn "$home" "$wt" "$fakebin" "$case_dir/launch.log" "$id" "$proj" \
+    --harness pi --model claude-opus-5 2>&1)
+  status=$?
+  end_s=$(date +%s)
+  elapsed=$((end_s - start_s))
+  expect_code 1 "$status" "a hanging catalog read must refuse rather than launch unvalidated: $out"
+  assert_contains "$out" "could not be read" "refusal did not name the unreadable catalog"
+  [ "$elapsed" -lt 15 ] || fail "catalog read was not bounded by FM_WORKER_ACCOUNT_CHECK_SECONDS: took ${elapsed}s against a 30s hang"
+  pass "fm-spawn: pi_model_validate bounds a hanging catalog read instead of silently eating the outer relaunch timeout"
+}
+
 test_refuses_bare_alias_and_claude_code_suffix
 test_accepts_listed_non_anthropic_provider
 test_refuses_unlisted_provider_id
@@ -216,5 +342,8 @@ test_colliding_selector_is_never_suggested
 test_accepts_exact_anthropic_ids
 test_refuses_unreadable_catalog
 test_exempts_codex_native_ultra_pathway
+test_strips_ambient_pi_session_env_from_the_probe
+test_unreadable_catalog_still_refuses_under_clean_env
+test_bounds_a_hanging_catalog_read
 
 echo "# all fm-pi-model-guard tests passed"
