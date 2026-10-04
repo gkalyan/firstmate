@@ -1,0 +1,11 @@
+# pi pane state: alive
+env markers seen: PI_CODING_AGENT 
+HEAD  model=claude-opus-5          rc=0 
+BASE  model=claude-opus-5          rc=0 
+HEAD  model=anthropic/claude-opus-5 rc=0 
+BASE  model=anthropic/claude-opus-5 rc=0 
+HEAD  model=claude-opus-5-bogus    rc=1 error: Pi model 'claude-opus-5-bogus' matches no entry in '/opt/homebrew/bin/pi --list-models' (Pi would fuzzy-match it, possibly to an uncredentialed provider); use one of these exact ids: anthropic/claude-fable-5 anthr
+BASE  model=claude-opus-5-bogus    rc=1 error: Pi model 'claude-opus-5-bogus' matches no entry in '/opt/homebrew/bin/pi --list-models' (Pi would fuzzy-match it, possibly to an uncredentialed provider); use one of these exact ids: anthropic/claude-fable-5 anthr
+-- unreadable catalog (pi stand-in exits 1) must still refuse under HEAD:
+HEAD  model=claude-opus-5          rc=1 error: '/var/folders/b9/kh_24b7n4fj5qzmhc1sr5b2c0000gn/T/tmp.8624RbynOI/pi --list-models' could not be read; cannot confirm Pi model 'claude-opus-5' has a credentialed provider, so refusing rather than launching against 
+done

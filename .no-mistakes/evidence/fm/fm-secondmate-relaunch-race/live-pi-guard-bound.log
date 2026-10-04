@@ -1,0 +1,2 @@
+HEAD wedged-catalog: rc=1 elapsed=3s error: '/var/folders/b9/kh_24b7n4fj5qzmhc1sr5b2c0000gn/T/tmp.ratq9EhkAE/pi --list-models' could not be read; cannot conf
+BASE wedged-catalog: rc=142 elapsed=60s 

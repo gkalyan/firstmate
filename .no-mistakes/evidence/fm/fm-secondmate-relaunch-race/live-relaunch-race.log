@@ -1,0 +1,27 @@
+# session=fm-lab-relaunch-90400-27157 herdr=herdr 0.9.0 pi=0.87.1
+
+=== Scenario 1: fresh real Pi pane during startup (HEAD vs BASE probe) ===
+t+01s HEAD: state=dead status=skipped kill=0 cause= reason=endpoint spawned 1s ago (backend=herdr), inside the 120s startup grace; agent may still be registering
+      BASE: state=dead status=relaunchable kill=1 cause=confirmed agent absence on existing endpoint reason=
+t+01s HEAD: state=dead status=skipped kill=0 cause= reason=endpoint spawned 1s ago (backend=herdr), inside the 120s startup grace; agent may still be registering
+      BASE: state=dead status=relaunchable kill=1 cause=confirmed agent absence on existing endpoint reason=
+t+03s HEAD: state=alive status=alive kill=0 cause= reason=
+      BASE: state=alive status=alive kill=0 cause= reason=
+summary: base_would_relaunch_fresh_pane=1 head_relaunchable=0 head_grace_skip=1
+
+=== Scenario 2: genuinely old dead endpoint is still recovered ===
+HEAD old spawn_gen : state=dead status=relaunchable kill=1 cause=confirmed agent absence on existing endpoint reason=
+HEAD no spawn_gen  : state=dead status=relaunchable kill=1 cause=confirmed agent absence on existing endpoint reason=
+HEAD future gen    : state=dead status=relaunchable kill=1 cause=confirmed agent absence on existing endpoint reason=
+HEAD grace=0       : state=dead status=relaunchable kill=1 cause=confirmed agent absence on existing endpoint reason=
+
+=== Scenario 3: relaunch while another spawn holds .spawn-sm2.lock ===
+probe: status=relaunchable kill=1
+relaunch rc=1 status=skipped reason=another spawn is already creating task sm2; leaving its endpoint alone
+pane w2:p1 after skipped relaunch: w2:p1
+ledger after skip: <none>
+-- lock released; relaunch proceeds (kills dead pane, invokes fm-spawn --secondmate):
+relaunch rc=1 status=relaunchable spawn-out-first-line: error: firstmate home does not exist or is not a directory: /private/var/folders/b9/kh_24b7n4fj5qzmhc1sr5b2c0000gn/T/fm-lab.5nrwWq/sm-sm2
+pane w2:p1 after unlocked relaunch: 
+ledger: 1791110090	attempt 1791110092	failed 
+pane w1:p1 (scenario-1 Pi) still present: w1:p1
