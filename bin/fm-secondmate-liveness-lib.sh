@@ -51,6 +51,10 @@
 # fm_sm_live_within_startup_grace gives a just-published endpoint a window
 # before `no-agent` is trusted as death at all, so neither path can close an
 # endpoint a live spawn just created.
+# A separate per-home relaunch lock ($STATE/.secondmate-relaunch.lock) further
+# serializes relaunches of different mates against each other, since each
+# fresh spawn owns the same task-set lock. The watcher uses its spawn timeout
+# as the lock-wait bound; an untimed sweep defaults to 600 seconds.
 # The attempt ledger (.secondmate-relaunch-<id>, one line per attempt plus one
 # per outcome) is both the durable relaunch record and the input to the
 # watcher's relaunch bound; teardown removes it.
@@ -316,13 +320,15 @@ fm_secondmate_liveness_probe() {  # <meta> <id> <full|poll>
 
 # fm_secondmate_liveness_relaunch <meta> <id> [timeout-secs]
 #
-# Acts on a `relaunchable` probe verdict for <id>: kills a confirmed-dead local
-# endpoint first (FM_SM_LIVE_KILL), records the attempt and its outcome in the
-# per-mate ledger, then runs the guarded secondmate spawn. A positive timeout
+# Acts on a `relaunchable` probe verdict for <id>: takes the per-home relaunch
+# lock, records the attempt, kills a confirmed-dead local endpoint if required
+# (FM_SM_LIVE_KILL), runs the guarded spawn, then records its outcome.
+# The header owns the lock-wait bounds. A positive timeout separately
 # wraps the spawn in fm_run_timed so a watcher poll stays bounded; 124/137 mean
 # the bound fired. Returns the spawn exit status; combined spawn output is in
-# FM_SM_LIVE_OUT and the status in FM_SM_LIVE_RC. When the ledger cannot be
-# read or the attempt row cannot be appended, nothing is killed or spawned: the verdict becomes
+# FM_SM_LIVE_OUT and the status in FM_SM_LIVE_RC. When the lock wait expires,
+# the ledger cannot be read, or the attempt row cannot be appended, nothing is
+# killed or spawned and no attempt is recorded: the verdict becomes
 # FM_SM_LIVE_STATUS=skipped with FM_SM_LIVE_REASON set and this returns 1.
 # Caller holds the liveness lock and owns reporting.
 #
@@ -337,7 +343,7 @@ fm_secondmate_liveness_probe() {  # <meta> <id> <full|poll>
 # is released at once, so the real spawn this function goes on to run gets to
 # take the lock itself.
 fm_secondmate_liveness_relaunch() {  # <meta> <id> [timeout-secs]
-  local meta=$1 id=$2 timeout=${3:-} spawn_lock
+  local meta=$1 id=$2 timeout=${3:-} spawn_lock relaunch_lock wait_seconds rc=0
   FM_SM_LIVE_OUT='' FM_SM_LIVE_RC=0
   fm_sm_live_require_locks || {
     FM_SM_LIVE_STATUS=skipped
@@ -360,7 +366,17 @@ fm_secondmate_liveness_relaunch() {  # <meta> <id> [timeout-secs]
     FM_SM_LIVE_RC=1
     return 1
   fi
+  fm_sm_live_require_locks || return 1
+  relaunch_lock="$STATE/.secondmate-relaunch.lock"
+  wait_seconds=${timeout:-600}
+  if ! fm_lock_acquire_wait_bounded "$relaunch_lock" "$wait_seconds"; then
+    FM_SM_LIVE_STATUS=skipped
+    FM_SM_LIVE_REASON="another secondmate relaunch still owns the per-home relaunch lock after ${wait_seconds}s; endpoint left $FM_SM_LIVE_STATE"
+    FM_SM_LIVE_RC=1
+    return 1
+  fi
   if ! fm_secondmate_liveness_ledger_add "$id" attempt; then
+    fm_lock_release "$relaunch_lock" || true
     FM_SM_LIVE_STATUS=skipped
     FM_SM_LIVE_REASON="relaunch ledger $STATE/.secondmate-relaunch-$id is unwritable; endpoint left $FM_SM_LIVE_STATE"
     FM_SM_LIVE_RC=1
@@ -376,7 +392,6 @@ fm_secondmate_liveness_relaunch() {  # <meta> <id> [timeout-secs]
     fi
     [ -z "$target" ] || fm_backend_kill "$backend" "$target" 2>/dev/null || true
   fi
-  local rc=0
   if [ -n "$timeout" ]; then
     FM_SM_LIVE_OUT=$(FM_SPAWN_NO_GUARD=1 fm_run_timed "$timeout" "$FM_ROOT/bin/fm-spawn.sh" "$id" --secondmate 2>&1) || rc=$?
   else
@@ -388,5 +403,6 @@ fm_secondmate_liveness_relaunch() {  # <meta> <id> [timeout-secs]
   else
     fm_secondmate_liveness_ledger_add "$id" failed || true
   fi
+  fm_lock_release "$relaunch_lock" || true
   return "$rc"
 }
