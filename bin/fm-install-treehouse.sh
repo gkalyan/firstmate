@@ -10,15 +10,6 @@
 #   fm-install-treehouse.sh <destination-directory>
 #
 # Pins Treehouse v2.3.0, the version exercised by the local real-Herdr suite.
-#
-# The pin is also a capability floor, not just a reproducibility choice.
-# bin/fm-spawn.sh acquires a secondmate home's worktree with
-# `treehouse get --root <the home's private pool root>`
-# (bin/fm-wake-lib.sh's fm_treehouse_home_pool_root), and Treehouse grew
-# --root/TREEHOUSE_ROOT only in v2.2.0. An older pin rejects that acquire with
-# `unknown flag: --root`, the pane never leaves the project, and every
-# secondmate-shaped spawn in the lane is correctly refused by fm-spawn.sh's
-# worktree-isolation assertion. Never move this pin below v2.2.0.
 set -eu
 
 FM_TREEHOUSE_CI_VERSION=2.3.0
@@ -77,7 +68,7 @@ fi
 [ "$ACTUAL_SHA256" = "$SHA256" ] || die "checksum mismatch for $ARCHIVE (expected $SHA256, got $ACTUAL_SHA256)"
 
 tar -xzf "$TMP/$ARCHIVE" -C "$TMP"
-# Archive layout: a single `treehouse` binary at the archive root (verified for v2.3.0).
+# Archive layout: a single `treehouse` binary at the archive root (verified for v2.0.1).
 if [ -f "$TMP/treehouse" ]; then
   BIN="$TMP/treehouse"
 elif [ -f "$TMP/treehouse-v${FM_TREEHOUSE_CI_VERSION}/treehouse" ]; then
@@ -91,7 +82,7 @@ mkdir -p "$DESTINATION"
 install -m 0755 "$BIN" "$DESTINATION/treehouse"
 
 installed_version=$("$DESTINATION/treehouse" --version 2>/dev/null | tr -d '[:space:]')
-# treehouse prints "v2.3.0" (leading v) on --version.
+# treehouse prints "v2.0.1" (leading v) on --version.
 case "$installed_version" in
   "v${FM_TREEHOUSE_CI_VERSION}"|"${FM_TREEHOUSE_CI_VERSION}") ;;
   *)
